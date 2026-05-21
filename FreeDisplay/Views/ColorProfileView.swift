@@ -10,6 +10,7 @@ struct ColorProfileView: View {
     @State private var applyingPath: URL? = nil
     @State private var applyError: String?
     @State private var applySuccess = false
+    @State private var hiddenIncompatibleCount: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -51,6 +52,17 @@ struct ColorProfileView: View {
                         .padding(.vertical, 4)
                 }
 
+                if hiddenIncompatibleCount > 0 {
+                    CapabilityNoticeRow(
+                        icon: "info.circle.fill",
+                        color: .secondary,
+                        title: "Showing display-compatible RGB profiles",
+                        detail: "\(hiddenIncompatibleCount) print/non-display profiles hidden"
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                }
+
                 // Recommended profiles (display-specific or well-known)
                 let recommended = recommendedProfiles
                 let rest = otherProfiles
@@ -90,15 +102,18 @@ struct ColorProfileView: View {
     // MARK: - Grouping
 
     private var recommendedProfiles: [ICCProfile] {
-        let keywords = ["sRGB", "P3", "Display", "LCD", "Apple", "Color LCD"]
+        let keywords = ["sRGB", "P3", "Display", "LCD", "Apple", "Color LCD", display.name]
         return profiles.filter { p in
+            p.colorSpaceType == "RGB" &&
             keywords.contains { p.name.localizedCaseInsensitiveContains($0) }
         }
     }
 
     private var otherProfiles: [ICCProfile] {
         let recommended = Set(recommendedProfiles.map(\.path))
-        return profiles.filter { !recommended.contains($0.path) }
+        return profiles.filter { profile in
+            profile.colorSpaceType == "RGB" && !recommended.contains(profile.path)
+        }
     }
 
     // MARK: - Actions
@@ -111,6 +126,7 @@ struct ColorProfileView: View {
         let loaded = await svc.enumerateProfiles()
         let currentURL = svc.currentProfileURL(for: displayID)
         profiles = loaded
+        hiddenIncompatibleCount = loaded.filter { $0.colorSpaceType != "RGB" }.count
         selectedPath = currentURL
         isLoading = false
     }
@@ -124,21 +140,30 @@ struct ColorProfileView: View {
             applyingPath = profile.path
             defer { applyingPath = nil }
             let success = ColorProfileService.shared.setProfile(profile, for: display.displayID)
-            if success {
-                selectedPath = profile.path
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            let verifiedURL = ColorProfileService.shared.currentProfileURL(for: display.displayID)
+            if success, verifiedURL == nil || urlsMatch(verifiedURL, profile.path) {
+                selectedPath = verifiedURL ?? profile.path
                 applySuccess = true
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     applySuccess = false
                 }
             } else {
-                applyError = String(localized: "Apply failed, please try again")
+                selectedPath = verifiedURL
+                applyError = String(localized: "macOS did not keep this profile for this display")
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     applyError = nil
                 }
             }
         }
+    }
+
+    private func urlsMatch(_ lhs: URL?, _ rhs: URL) -> Bool {
+        guard let lhs else { return false }
+        return lhs.standardizedFileURL.path == rhs.standardizedFileURL.path ||
+            lhs.resolvingSymlinksInPath().path == rhs.resolvingSymlinksInPath().path
     }
 }
 
@@ -159,6 +184,34 @@ private struct SectionBadge: View {
             .padding(.horizontal, 12)
             .padding(.top, 6)
             .padding(.bottom, 2)
+    }
+}
+
+private struct CapabilityNoticeRow: View {
+    let icon: String
+    let color: Color
+    let title: LocalizedStringKey
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(color)
+                .frame(width: 16)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
     }
 }
 

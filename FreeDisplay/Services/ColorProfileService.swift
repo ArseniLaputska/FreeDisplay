@@ -186,29 +186,40 @@ final class ColorProfileService: @unchecked Sendable {
         let uuid = rawUUID.takeRetainedValue()
 
         guard let deviceClass = kColorSyncDisplayDeviceClass?.takeUnretainedValue(),
-              let profileIDKey = kColorSyncDeviceDefaultProfileID?.takeUnretainedValue()
+              let profileIDKey = kColorSyncDeviceDefaultProfileID?.takeUnretainedValue(),
+              let factoryProfilesKey = kColorSyncFactoryProfiles?.takeUnretainedValue(),
+              let customProfilesKey = kColorSyncCustomProfiles?.takeUnretainedValue(),
+              let profileURLKey = kColorSyncDeviceProfileURL?.takeUnretainedValue()
         else { return nil }
 
         guard let rawInfo = ColorSyncDeviceCopyDeviceInfo(deviceClass, uuid) else { return nil }
         let info = rawInfo.takeRetainedValue() as NSDictionary
 
+        let customProfiles = info[customProfilesKey] as? NSDictionary
+        if let url = customProfiles?[profileIDKey] as? NSURL {
+            return url as URL
+        }
+
         // Determine the active mode name from FactoryProfiles[DeviceDefaultProfileID].
         // Both CustomProfiles and FactoryProfiles use this mode name as their key.
-        let factoryProfiles = info["FactoryProfiles"] as? NSDictionary
+        let factoryProfiles = info[factoryProfilesKey] as? NSDictionary
         let activeModeName = factoryProfiles?[profileIDKey] as? String
 
         // CustomProfiles: keys are mode names, values are NSURL directly.
         if let modeName = activeModeName,
-           let customProfiles = info["CustomProfiles"] as? NSDictionary,
-           let url = customProfiles[modeName] as? NSURL {
+           let url = customProfiles?[modeName] as? NSURL {
             return url as URL
         }
 
-        // Fall back to FactoryProfiles: the mode entry is a dict with a DeviceProfileURL string.
+        // Fall back to FactoryProfiles: the mode entry is a dict with a DeviceProfileURL.
         if let modeName = activeModeName,
-           let modeDict = factoryProfiles?[modeName] as? NSDictionary,
-           let urlString = modeDict["DeviceProfileURL"] as? String {
-            return URL(string: urlString)
+           let modeDict = factoryProfiles?[modeName] as? NSDictionary {
+            if let url = modeDict[profileURLKey] as? NSURL {
+                return url as URL
+            }
+            if let urlString = modeDict[profileURLKey] as? String {
+                return URL(string: urlString)
+            }
         }
 
         return nil

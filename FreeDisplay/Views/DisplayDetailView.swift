@@ -204,10 +204,14 @@ private struct DDCControlPanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             commandHeader
-            contrastRow
-            volumeRow
-            inputRow
-            powerRow
+            if isDDCUnavailable {
+                ddcUnavailableRow
+            } else {
+                contrastRow
+                volumeRow
+                inputRow
+                powerRow
+            }
             diagnosticsRows
         }
         .task(id: display.displayID) {
@@ -360,28 +364,21 @@ private struct DDCControlPanelView: View {
         .help("Sends DDC VCP 0xD6 power commands. This is not a true macOS disconnect.")
     }
 
+    private var ddcUnavailableRow: some View {
+        CapabilityNoticeRow(
+            icon: "exclamationmark.triangle.fill",
+            color: .orange,
+            title: "DDC/CI unavailable on this link",
+            detail: "This connection is falling back to software brightness."
+        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
     private var diagnosticsRows: some View {
         VStack(alignment: .leading, spacing: 0) {
             if isDDCUnavailable {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .frame(width: 18)
-                        .font(.caption)
-                        .accessibilityHidden(true)
-
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("DDC/CI unavailable on this link")
-                            .font(.caption)
-                        Text("Using software brightness")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                EmptyView()
             } else if snapshots.isEmpty && !isLoading {
                 Text("No DDC diagnostics yet")
                     .font(.caption)
@@ -524,6 +521,35 @@ private struct SectionBadgeSmall: View {
     }
 }
 
+private struct CapabilityNoticeRow: View {
+    let icon: String
+    let color: Color
+    let title: LocalizedStringKey
+    let detail: LocalizedStringKey
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(color)
+                .frame(width: 18)
+                .font(.caption)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+}
+
 private struct DDCSnapshotRow: View {
     let snapshot: DDCService.VCPFeatureSnapshot
 
@@ -586,111 +612,120 @@ private struct AdvancedDisplayPanelView: View {
             .padding(.bottom, 2)
 
             if let state {
-                AdvancedInfoRow(label: "Transport", value: state.colorTransport)
-                AdvancedInfoRow(label: "Pixel Encoding", value: state.pixelEncoding)
-                AdvancedInfoRow(label: "Bit Depth", value: "\(state.bitsPerChannel)-bit")
-                AdvancedInfoRow(label: "Range", value: state.dynamicRange)
-                AdvancedInfoRow(label: "EDR Current", value: String(format: "%.2fx", state.edrCurrent))
-                AdvancedInfoRow(label: "EDR Potential", value: String(format: "%.2fx", state.edrPotential))
-                AdvancedInfoRow(label: "CoreDisplay", value: state.coreDisplayAvailable ? "Loaded" : "Unavailable")
-                AdvancedInfoRow(label: "HDR Support", value: boolText(state.hdrSupported))
-                AdvancedInfoRow(label: "HDR State", value: boolText(state.hdrEnabled))
-                AdvancedInfoRow(label: "Private EDR", value: boolText(state.edrEnabled))
-                AdvancedInfoRow(label: "Headroom", value: headroomText(state))
-                AdvancedInfoRow(label: "Nits", value: nitsText(state))
-                AdvancedInfoRow(label: "Vendor/Product", value: "\(state.vendorID) / \(state.productID)")
-                AdvancedInfoRow(label: "Serial", value: "\(state.serialID)")
-                AdvancedInfoRow(
-                    label: "Output Modes",
-                    value: state.outputModes.isEmpty ? "Unavailable" : "\(state.outputModes.count)"
-                )
+                AdvancedInfoRow(label: "Signal", value: signalSummary(state))
+                AdvancedInfoRow(label: "Dynamic Range", value: dynamicRangeSummary(state))
+                AdvancedInfoRow(label: "Display ID", value: "\(state.vendorID) / \(state.productID)")
 
-                if !state.outputModes.isEmpty {
+                if hasPrivateControls(state) {
+                    CapabilityNoticeRow(
+                        icon: "checkmark.circle.fill",
+                        color: .green,
+                        title: "Advanced controls available",
+                        detail: "Only capabilities reported by this display are shown below."
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                } else {
+                    CapabilityNoticeRow(
+                        icon: "info.circle.fill",
+                        color: .secondary,
+                        title: "No private controls exposed for this display",
+                        detail: "The panel stays read-only; software brightness and HiDPI overrides can still work."
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                }
+
+                if state.canSetOutputMode {
                     outputModeRow(state)
                 }
 
-                HStack(spacing: 8) {
-                    Button(state.hdrEnabled == true ? "Disable HDR" : "Enable HDR") {
-                        let next = !(state.hdrEnabled ?? false)
-                        let ok = AdvancedDisplayService.shared.setHDRMode(next, for: display.displayID)
-                        statusMessage = ok ? "HDR toggled" : "HDR private API disabled"
-                        refresh()
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(!state.canSetHDR || state.hdrSupported == false)
-
-                    Button("Max Headroom") {
-                        let target = max(state.potentialHeadroom ?? state.edrPotential, 1.0)
-                        let ok = AdvancedDisplayService.shared.requestHeadroom(target, for: display.displayID)
-                        statusMessage = ok ? "Max headroom requested" : "Headroom API disabled"
-                        refresh()
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(!state.canRequestHeadroom)
-
-                    Button("Reset Headroom") {
-                        let ok = AdvancedDisplayService.shared.requestHeadroom(1.0, for: display.displayID)
-                        statusMessage = ok ? "Headroom reset" : "Headroom API disabled"
-                        refresh()
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(!state.canRequestHeadroom)
-
-                    Button("Soft Disconnect") {
-                        let ok = AdvancedDisplayService.shared.softDisconnect(display: display)
-                        statusMessage = ok ? "Display disabled" : "Soft disconnect unavailable"
-                        if ok {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                                displayManager.refreshDisplays()
+                if state.canSetHDR || state.canRequestHeadroom || state.canSoftDisconnect {
+                    HStack(spacing: 8) {
+                        if state.canSetHDR {
+                            Button(state.hdrEnabled == true ? "Disable HDR" : "Enable HDR") {
+                                let next = !(state.hdrEnabled ?? false)
+                                let ok = AdvancedDisplayService.shared.setHDRMode(next, for: display.displayID)
+                                statusMessage = ok ? "HDR toggled" : "HDR private API disabled"
+                                refresh()
                             }
-                        } else {
-                            refresh()
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                        }
+
+                        if state.canRequestHeadroom {
+                            Button("Max Headroom") {
+                                let target = max(state.potentialHeadroom ?? state.edrPotential, 1.0)
+                                let ok = AdvancedDisplayService.shared.requestHeadroom(target, for: display.displayID)
+                                statusMessage = ok ? "Max headroom requested" : "Headroom API disabled"
+                                refresh()
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+
+                            Button("Reset Headroom") {
+                                let ok = AdvancedDisplayService.shared.requestHeadroom(1.0, for: display.displayID)
+                                statusMessage = ok ? "Headroom reset" : "Headroom API disabled"
+                                refresh()
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                        }
+
+                        if state.canSoftDisconnect {
+                            Button("Soft Disconnect") {
+                                let ok = AdvancedDisplayService.shared.softDisconnect(display: display)
+                                statusMessage = ok ? "Display disabled" : "Soft disconnect unavailable"
+                                if ok {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                                        displayManager.refreshDisplays()
+                                    }
+                                } else {
+                                    refresh()
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                            .foregroundStyle(.red)
                         }
                     }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .foregroundStyle(.red)
-                    .disabled(!state.canSoftDisconnect)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 6)
+
+                if state.canForceColorOutput {
+                    HStack(spacing: 8) {
+                        Button("System Color") {
+                            forceColorMode(0)
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+
+                        Button("Force RGB") {
+                            forceColorMode(1)
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+
+                        Button("Force YCbCr") {
+                            forceColorMode(2)
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+                }
 
                 HStack(spacing: 8) {
-                    Button("System Color") {
-                        forceColorMode(0)
+                    if state.hasEDID {
+                        Button("Copy EDID") {
+                            let ok = AdvancedDisplayService.shared.copyEDIDHex(for: display.displayID)
+                            statusMessage = ok ? "EDID copied" : "No EDID"
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
                     }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(!state.canForceColorOutput)
-
-                    Button("Force RGB") {
-                        forceColorMode(1)
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(!state.canForceColorOutput)
-
-                    Button("Force YCbCr") {
-                        forceColorMode(2)
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(!state.canForceColorOutput)
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 4)
-
-                HStack(spacing: 8) {
-                    Button("Copy EDID") {
-                        let ok = AdvancedDisplayService.shared.copyEDIDHex(for: display.displayID)
-                        statusMessage = ok ? "EDID copied" : "No EDID"
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .disabled(!state.hasEDID)
 
                     Button("Software Boost") {
                         let adj = GammaAdjustment(gain: 20)
@@ -718,7 +753,7 @@ private struct AdvancedDisplayPanelView: View {
             }
         }
         .task(id: display.displayID) {
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: .milliseconds(1200))
             guard !Task.isCancelled else { return }
             refresh()
         }
@@ -788,22 +823,30 @@ private struct AdvancedDisplayPanelView: View {
         refresh()
     }
 
-    private func boolText(_ value: Bool?) -> String {
-        guard let value else { return "Unknown" }
-        return value ? "Yes" : "No"
+    private func hasPrivateControls(_ state: AdvancedDisplayState) -> Bool {
+        state.canSetHDR ||
+        state.canRequestHeadroom ||
+        state.canForceColorOutput ||
+        state.canSetOutputMode ||
+        state.canSoftDisconnect ||
+        state.hasEDID
     }
 
-    private func headroomText(_ state: AdvancedDisplayState) -> String {
-        let current = state.currentHeadroom.map { String(format: "%.2fx", $0) } ?? "?"
-        let potential = state.potentialHeadroom.map { String(format: "%.2fx", $0) } ?? "?"
-        let reference = state.referenceHeadroom.map { String(format: "%.2fx", $0) } ?? "?"
-        return "\(current) / \(potential) / ref \(reference)"
+    private func signalSummary(_ state: AdvancedDisplayState) -> String {
+        let transport = state.colorTransport == "Unknown" ? "transport unknown" : state.colorTransport
+        let encoding = state.pixelEncoding == "Unknown" ? "" : " · \(state.pixelEncoding)"
+        return "\(transport) · \(state.bitsPerChannel)-bit\(encoding)"
     }
 
-    private func nitsText(_ state: AdvancedDisplayState) -> String {
-        let current = state.displayNits.map { String(format: "%.0f", $0) } ?? "?"
-        let nominal = state.nominalPixelNits.map { String(format: "%.0f", $0) } ?? "?"
-        return "\(current) / nominal \(nominal)"
+    private func dynamicRangeSummary(_ state: AdvancedDisplayState) -> String {
+        if let nits = state.displayNits {
+            return "\(state.dynamicRange) · \(String(format: "%.0f", nits)) nits"
+        }
+        let headroom = state.potentialHeadroom ?? state.edrPotential
+        if headroom > 1.0 {
+            return "\(state.dynamicRange) · \(String(format: "%.2fx", headroom)) headroom"
+        }
+        return state.dynamicRange
     }
 }
 

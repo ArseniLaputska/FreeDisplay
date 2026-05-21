@@ -10,12 +10,14 @@ struct DisplayModeListView: View {
     @State private var errorMessage: String?
 
     private var currentMode: DisplayMode? { display.currentDisplayMode }
+    private var rawDiagnosticModes: [DisplayMode] {
+        showRawModes ? DisplayMode.diagnosticModes(for: display.displayID) : []
+    }
 
     /// Group modes by (resolution + HiDPI), sorted by resolution descending.
     private var resolutionGroups: [ResolutionGroup] {
-        let diagnostic = showRawModes ? DisplayMode.diagnosticModes(for: display.displayID) : []
-        let available = showRawModes && !diagnostic.isEmpty
-            ? diagnostic
+        let available = showRawModes && !rawDiagnosticModes.isEmpty
+            ? rawDiagnosticModes
             : display.availableModes.isEmpty
             ? display.currentDisplayMode.map { [$0] } ?? []
             : display.availableModes
@@ -73,19 +75,25 @@ struct DisplayModeListView: View {
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.15)) { showRawModes.toggle() }
                 }) {
-                    Text("RAW")
+                    Label("RAW", systemImage: showRawModes ? "eye.fill" : "eye")
+                        .labelStyle(.titleAndIcon)
                         .font(.caption2)
                         .fontWeight(showRawModes ? .semibold : .regular)
                         .foregroundColor(showRawModes ? .accentColor : .secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Show raw CoreGraphics modes")
+                .help("Diagnostic view of raw CoreGraphics modes")
             }
             .padding(.horizontal, 12)
             .padding(.top, 6)
             .padding(.bottom, 2)
 
-            if resolutionGroups.isEmpty {
+            if showRawModes && rawDiagnosticModes.isEmpty {
+                ModeUnavailableNotice(
+                    title: "No raw switchable modes exposed",
+                    detail: "macOS is not exposing alternate modes for this HDMI path. Use HiDPI override generation, then reconnect the display."
+                )
+            } else if resolutionGroups.isEmpty {
                 Text("No display modes available")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -144,6 +152,11 @@ struct DisplayModeListView: View {
                 .transition(.opacity)
             }
         }
+        .task(id: display.displayID) {
+            if display.availableModes.isEmpty {
+                await display.loadDetails()
+            }
+        }
     }
 
     // MARK: - Actions
@@ -196,6 +209,34 @@ struct DisplayModeListView: View {
 }
 
 // MARK: - Data model
+
+private struct ModeUnavailableNotice: View {
+    let title: LocalizedStringKey
+    let detail: LocalizedStringKey
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "info.circle.fill")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 16)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption)
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+}
 
 private struct ResolutionGroup: Identifiable {
     let width: Int
