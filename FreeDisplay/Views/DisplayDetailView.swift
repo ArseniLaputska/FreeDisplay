@@ -3,9 +3,11 @@ import SwiftUI
 // MARK: - DisplayDetailView
 
 struct DisplayDetailView: View {
-    @ObservedObject var display: DisplayInfo
-    @EnvironmentObject var displayManager: DisplayManager
-    @ObservedObject private var ddcService = DDCService.shared
+    @Bindable var display: DisplayInfo
+    @Environment(DisplayManager.self) var displayManager
+    
+    private let ddcService = DDCService.shared
+    
     @State private var showModeList: Bool = false
     @State private var showDDCControl: Bool = false
     @State private var showColorProfile: Bool = false
@@ -190,7 +192,7 @@ struct DisplayDetailView: View {
 // MARK: - DDCControlPanelView
 
 private struct DDCControlPanelView: View {
-    @ObservedObject var display: DisplayInfo
+    @Bindable var display: DisplayInfo
 
     @State private var snapshots: [DDCService.VCPFeatureSnapshot] = []
     @State private var isLoading: Bool = false
@@ -580,8 +582,8 @@ private struct DDCSnapshotRow: View {
 // MARK: - AdvancedDisplayPanelView
 
 private struct AdvancedDisplayPanelView: View {
-    @ObservedObject var display: DisplayInfo
-    @EnvironmentObject var displayManager: DisplayManager
+    @Bindable var display: DisplayInfo
+    @Environment(DisplayManager.self) var displayManager
     @State private var state: AdvancedDisplayState?
     @State private var statusMessage: String?
     @State private var selectedOutputModeID: String = ""

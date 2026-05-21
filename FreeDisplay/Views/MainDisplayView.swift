@@ -3,10 +3,10 @@ import SwiftUI
 /// Displays the "Set as Main Display" control inside DisplayDetailView.
 /// Shows a status row when this display is already main, or a tappable button otherwise.
 struct MainDisplayView: View {
-    @ObservedObject var display: DisplayInfo
-    @EnvironmentObject var displayManager: DisplayManager
+    @Bindable var display: DisplayInfo
+    @Environment(DisplayManager.self) var displayManager
     @State private var errorMessage: String?
-    @State private var isHovered = false
+    @State private var isHovered: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

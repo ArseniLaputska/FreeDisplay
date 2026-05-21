@@ -3,22 +3,25 @@ import CoreGraphics
 import IOKit
 import AppKit
 
+@Observable
 @MainActor
-class DisplayInfo: ObservableObject, Identifiable {
+final class DisplayInfo: Identifiable {
     nonisolated var id: CGDirectDisplayID { displayID }
     let displayID: CGDirectDisplayID
-    @Published var name: String
-    @Published var isBuiltin: Bool
-    @Published var isMain: Bool
-    @Published var isOnline: Bool
-    @Published var isEnabled: Bool
-    @Published var bounds: CGRect
-    @Published var pixelWidth: Int
-    @Published var pixelHeight: Int
-    @Published var brightness: Double
-    @Published var availableModes: [DisplayMode]
-    @Published var currentDisplayMode: DisplayMode?
-    @Published var ddcValues: [UInt8: UInt16?] = [:]
+    
+    var name: String
+    var isBuiltin: Bool
+    var isMain: Bool
+    var isOnline: Bool
+    var isEnabled: Bool
+    var bounds: CGRect
+    var pixelWidth: Int
+    var pixelHeight: Int
+    var brightness: Double
+    var availableModes: [DisplayMode]
+    var currentDisplayMode: DisplayMode?
+    var ddcValues: [UInt8: UInt16?] = [:]
+    
     let vendorNumber: UInt32
     let modelNumber: UInt32
     let serialNumber: UInt32

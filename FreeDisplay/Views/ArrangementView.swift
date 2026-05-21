@@ -4,7 +4,7 @@ import SwiftUI
 /// Shows all active displays as scaled thumbnails on a canvas.
 /// Supports drag-to-reposition and "Set as main display" button for secondary displays.
 struct ArrangementView: View {
-    @EnvironmentObject var displayManager: DisplayManager
+    @Environment(DisplayManager.self) var displayManager
     @State private var draggedID: CGDirectDisplayID?
     @State private var dragOffset: CGSize = .zero
     @State private var dragError: String?

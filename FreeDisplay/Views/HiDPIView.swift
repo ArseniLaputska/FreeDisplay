@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct HiDPIRowView: View {
-    @ObservedObject var display: DisplayInfo
+    @Bindable var display: DisplayInfo
     @State private var isHovered = false
     @State private var isLoading = false
     @State private var errorMessage: String? = nil

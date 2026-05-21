@@ -3,13 +3,13 @@ import AppKit
 
 // MARK: - SystemColorViewModel
 
-@MainActor
-final class SystemColorViewModel: ObservableObject {
-    @Published var sampledColor: NSColor? = nil
-    @Published var hexValue: String = "--"
-    @Published var rgbValue: String = "--"
-    @Published var hsbValue: String = "--"
-    @Published var isSampling: Bool = false
+@MainActor @Observable
+final class SystemColorViewModel {
+    var sampledColor: NSColor? = nil
+    var hexValue: String = "--"
+    var rgbValue: String = "--"
+    var hsbValue: String = "--"
+    var isSampling: Bool = false
 
     func startSampling() {
         isSampling = true
@@ -54,8 +54,8 @@ final class SystemColorViewModel: ObservableObject {
 // MARK: - SystemColorView (embedded in tools section)
 
 struct SystemColorView: View {
-    @StateObject private var vm = SystemColorViewModel()
-    @ObservedObject private var settings = SettingsService.shared
+    @State private var vm = SystemColorViewModel()
+    @State private var settings = SettingsService.shared
     @State private var showHistory = false
 
     var body: some View {

@@ -3,7 +3,7 @@ import SwiftUI
 /// Expandable "Image Adjustments" section — 11 sliders for software gamma/image adjustments.
 /// Mirrors BetterDisplay's Image Adjustment panel.
 struct ImageAdjustmentView: View {
-    @ObservedObject var display: DisplayInfo
+    @Bindable var display: DisplayInfo
 
     // MARK: - Local adjustment state (mirrors GammaAdjustment)
     @State private var contrast: Double = 0           // -100 … +100

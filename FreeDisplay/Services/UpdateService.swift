@@ -2,8 +2,8 @@ import Foundation
 import AppKit
 
 /// Checks for new releases on GitHub and surfaces the latest version info.
-@MainActor
-final class UpdateService: ObservableObject, @unchecked Sendable {
+@MainActor @Observable
+final class UpdateService: @unchecked Sendable {
     static let shared = UpdateService()
 
     // Set these when the repo is published. Placeholder values disable the update check.
@@ -15,11 +15,11 @@ final class UpdateService: ObservableObject, @unchecked Sendable {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }()
 
-    @Published var latestVersion: String? = nil
-    @Published var releaseURL: URL? = nil
-    @Published var isChecking: Bool = false
-    @Published var hasUpdate: Bool = false
-    @Published var lastCheckDate: Date? = nil
+    var latestVersion: String? = nil
+    var releaseURL: URL? = nil
+    var isChecking: Bool = false
+    var hasUpdate: Bool = false
+    var lastCheckDate: Date? = nil
 
     private init() {}
 

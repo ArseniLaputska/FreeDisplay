@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct DisplayModeListView: View {
-    @ObservedObject var display: DisplayInfo
+    @Bindable var display: DisplayInfo
     @State private var isSwitching: Bool = false
     @State private var flashModeID: Int32? = nil
     @State private var switchingModeID: Int32? = nil

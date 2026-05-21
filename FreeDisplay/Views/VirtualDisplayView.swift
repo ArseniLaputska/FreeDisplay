@@ -4,7 +4,7 @@ import CoreGraphics
 /// Virtual display management section shown in the MenuBarView tools area.
 /// Lists all saved virtual display configurations and allows creating / deleting them.
 struct VirtualDisplayView: View {
-    @StateObject private var service = VirtualDisplayService.shared
+    @State private var service = VirtualDisplayService.shared
     @State private var showCreateForm = false
     @State private var configToDelete: UUID?
     @State private var isCreating: Bool = false

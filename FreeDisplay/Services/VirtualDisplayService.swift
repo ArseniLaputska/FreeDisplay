@@ -11,8 +11,8 @@ extension CGVirtualDisplaySettings: @unchecked @retroactive Sendable {}
 
 /// Manages virtual display configurations and creates CGVirtualDisplay instances
 /// using the private CGVirtualDisplay API declared in the bridging header.
-@MainActor
-final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
+@MainActor @Observable
+final class VirtualDisplayService: @unchecked Sendable {
     static let shared = VirtualDisplayService()
     private init() {
         loadConfigs()
@@ -43,13 +43,14 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
 
     // MARK: - State
 
-    @Published var configs: [VirtualDisplayConfig] = []
+    var configs: [VirtualDisplayConfig] = []
 
     /// Active config IDs — populated when a CGVirtualDisplay is alive.
-    @Published private(set) var activeConfigIDs: Set<UUID> = []
+    private(set) var activeConfigIDs: Set<UUID> = []
 
     /// Strong references to live CGVirtualDisplay objects.
     /// Releasing an entry causes the virtual display to disappear immediately.
+    @ObservationIgnored
     private var activeDisplayObjects: [UUID: CGVirtualDisplay] = [:]
 
     private let configsKey = "fd.VirtualDisplayConfigs"

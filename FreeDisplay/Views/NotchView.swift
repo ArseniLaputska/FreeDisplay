@@ -4,7 +4,7 @@ import AppKit
 /// Displays notch information and provides a toggle to cover the notch with a black overlay.
 /// Only visible for built-in displays that actually have a notch (safeAreaInsets.top > 0).
 struct NotchView: View {
-    @ObservedObject var display: DisplayInfo
+    @Bindable var display: DisplayInfo
     @State private var isHidingNotch: Bool = false
     @State private var isHovered = false
 

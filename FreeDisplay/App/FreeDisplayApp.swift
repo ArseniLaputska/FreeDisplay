@@ -3,12 +3,12 @@ import SwiftUI
 @main
 struct FreeDisplayApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var displayManager = DisplayManager()
+    @State private var displayManager = DisplayManager()
 
     var body: some Scene {
         MenuBarExtra {
             MenuBarView()
-                .environmentObject(displayManager)
+                .environment(displayManager)
                 .task {
                     // Enable "external above built-in" arrangement by default on first launch.
                     let defaults = UserDefaults.standard

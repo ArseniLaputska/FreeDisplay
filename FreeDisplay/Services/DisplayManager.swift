@@ -31,14 +31,16 @@ private func displayReconfigCallback(
     }
 }
 
-@MainActor
-class DisplayManager: ObservableObject {
-    @Published var displays: [DisplayInfo] = []
+@Observable @MainActor
+final class DisplayManager {
+    var displays: [DisplayInfo] = []
 
     // nonisolated(unsafe) allows deinit (which is nonisolated in Swift 6) to access this value.
+    @ObservationIgnored
     nonisolated(unsafe) private var callbackContext: UnsafeMutableRawPointer?
 
     /// Work item used to debounce auto-arrange calls triggered by display config changes.
+    @ObservationIgnored
     private var autoArrangeWorkItem: DispatchWorkItem?
 
     init() {

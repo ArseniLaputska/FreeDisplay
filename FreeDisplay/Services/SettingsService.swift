@@ -5,8 +5,8 @@ import Combine
 /// Centralized settings persistence service.
 /// Simple settings use UserDefaults via @AppStorage-compatible keys.
 /// Complex configurations are stored as JSON in ~/Library/Application Support/FreeDisplay/.
-@MainActor
-final class SettingsService: ObservableObject, @unchecked Sendable {
+@MainActor @Observable
+final class SettingsService: @unchecked Sendable {
     static let shared = SettingsService()
 
     private let defaults = UserDefaults.standard
@@ -38,33 +38,33 @@ final class SettingsService: ObservableObject, @unchecked Sendable {
 
     // MARK: - Published Settings
 
-    @Published var launchAtLogin: Bool = false {
+    var launchAtLogin: Bool = false {
         didSet { defaults.set(launchAtLogin, forKey: Keys.launchAtLogin) }
     }
 
     /// Whether the first-launch "enable Launch at Login?" prompt has been shown.
-    @Published var launchAtLoginPrompted: Bool = false {
+    var launchAtLoginPrompted: Bool = false {
         didSet { defaults.set(launchAtLoginPrompted, forKey: Keys.launchAtLoginPrompted) }
     }
 
-    @Published var menuWidth: Double = 320 {
+    var menuWidth: Double = 320 {
         didSet { defaults.set(menuWidth, forKey: Keys.menuWidth) }
     }
 
-    @Published var showCombinedBrightness: Bool = true {
+    var showCombinedBrightness: Bool = true {
         didSet { defaults.set(showCombinedBrightness, forKey: Keys.showCombinedBrightness) }
     }
 
-    @Published var ddcCacheTTL: Double = 5.0 {
+    var ddcCacheTTL: Double = 5.0 {
         didSet { defaults.set(ddcCacheTTL, forKey: Keys.ddcCacheTTL) }
     }
 
-    @Published var checkUpdatesOnLaunch: Bool = true {
+    var checkUpdatesOnLaunch: Bool = true {
         didSet { defaults.set(checkUpdatesOnLaunch, forKey: Keys.checkUpdatesOnLaunch) }
     }
 
     /// Recently sampled colors (hex strings, newest first, max 20).
-    @Published var colorPickerHistory: [String] = [] {
+    var colorPickerHistory: [String] = [] {
         didSet {
             defaults.set(colorPickerHistory, forKey: Keys.colorPickerHistory)
         }

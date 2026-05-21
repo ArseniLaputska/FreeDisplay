@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct BrightnessSliderView: View {
-    @ObservedObject var display: DisplayInfo
+    @Bindable var display: DisplayInfo
+    
     @State private var localBrightness: Double = 50
     @State private var isDragging: Bool = false
     @State private var valueHighlighted: Bool = false

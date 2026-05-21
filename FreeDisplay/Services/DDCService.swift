@@ -10,7 +10,7 @@ import IOKit.graphics
 ///   - ARM64 (Apple Silicon): IOAVService via DCPAVServiceProxy
 ///   - x86_64 (Intel):        IOFramebuffer I2C via IOFBCopyI2CInterfaceForBus
 /// All I2C operations run on a private background queue to avoid blocking UI.
-final class DDCService: ObservableObject, @unchecked Sendable {
+final class DDCService: @unchecked Sendable {
     static let shared = DDCService()
 
     // VCP feature codes (DDC/CI standard)

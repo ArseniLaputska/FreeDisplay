@@ -595,10 +595,11 @@ extension AdvancedDisplayState {
     }
 }
 
-@MainActor
-final class AdvancedDisplayService: ObservableObject, @unchecked Sendable {
+@MainActor @Observable
+final class AdvancedDisplayService: @unchecked Sendable {
     static let shared = AdvancedDisplayService()
-    @Published private(set) var softDisconnectedDisplays: [SoftDisconnectedDisplay] = []
+    private(set) var softDisconnectedDisplays: [SoftDisconnectedDisplay] = []
+    @ObservationIgnored
     private var wsReady: Bool = false
 
     private let softDisconnectedKey = "fd.softDisconnectedDisplays"

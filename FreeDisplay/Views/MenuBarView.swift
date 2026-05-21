@@ -63,21 +63,27 @@ struct ExpandableRow: View {
 }
 
 struct MenuBarView: View {
-    @EnvironmentObject var displayManager: DisplayManager
-    @ObservedObject private var updateService = UpdateService.shared
-    @ObservedObject private var settings = SettingsService.shared
-    @ObservedObject private var virtualDisplayService = VirtualDisplayService.shared
-    @ObservedObject private var advancedDisplayService = AdvancedDisplayService.shared
+    @Environment(DisplayManager.self) var displayManager
+    
+    @State private var updateService = UpdateService.shared
+    @State private var settings = SettingsService.shared
+    @State private var virtualDisplayService = VirtualDisplayService.shared
+    @State private var advancedDisplayService = AdvancedDisplayService.shared
+    
     @State private var expandedDisplayIDs: Set<CGDirectDisplayID> = []
     @State private var showArrangement: Bool = false
     @State private var showVirtualDisplays: Bool = false
     @State private var showSoftDisconnects: Bool = false
     @State private var showAutoBrightness: Bool = false
     @State private var showSettings: Bool = false
-    @State private var quitHovered = false
+    @State private var quitHovered: Bool = false
 
     private var visibleDisplays: [DisplayInfo] {
         displayManager.displays.filter { !virtualDisplayService.isVirtualDisplay($0.displayID) }
+    }
+
+    private var displayIDs: [CGDirectDisplayID] {
+        displayManager.displays.map(\.displayID)
     }
 
     var body: some View {
@@ -127,7 +133,7 @@ struct MenuBarView: View {
 
                     if showArrangement {
                         ArrangementView()
-                            .environmentObject(displayManager)
+                            .environment(displayManager)
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
@@ -179,7 +185,7 @@ struct MenuBarView: View {
 
                 if showSoftDisconnects {
                     SoftDisconnectedDisplaysView()
-                        .environmentObject(displayManager)
+                        .environment(displayManager)
                         .padding(.leading, 8)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
@@ -282,8 +288,8 @@ struct MenuBarView: View {
         } // end VStack
         .frame(width: 340, height: 620)
         .padding(.vertical, 8)
-        .onReceive(displayManager.$displays) { newDisplays in
-            let validIDs = Set(newDisplays.map { $0.displayID })
+        .onChange(of: displayIDs) { _, newIDs in
+            let validIDs = Set(newIDs)
             expandedDisplayIDs = expandedDisplayIDs.intersection(validIDs)
         }
         .task {
@@ -297,8 +303,8 @@ struct MenuBarView: View {
 // MARK: - SoftDisconnectedDisplaysView
 
 private struct SoftDisconnectedDisplaysView: View {
-    @ObservedObject private var service = AdvancedDisplayService.shared
-    @EnvironmentObject var displayManager: DisplayManager
+    @State private var service = AdvancedDisplayService.shared
+    @Environment(DisplayManager.self) var displayManager
     @State private var statusMessage: String?
 
     var body: some View {
@@ -377,7 +383,7 @@ private struct SoftDisconnectedDisplaysView: View {
 // MARK: - SettingsView (Phase 12: embedded in MenuBarView)
 
 struct SettingsView: View {
-    @ObservedObject private var settings = SettingsService.shared
+    @State private var settings = SettingsService.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -465,8 +471,8 @@ struct SettingsView: View {
 // MARK: - DisplayRowView
 
 struct DisplayRowView: View {
-    @ObservedObject var display: DisplayInfo
-    @EnvironmentObject var displayManager: DisplayManager
+    @Bindable var display: DisplayInfo
+    @Environment(DisplayManager.self) var displayManager
     @State private var isHovered: Bool = false
 
     let isExpanded: Bool

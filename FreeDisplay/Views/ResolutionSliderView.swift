@@ -4,7 +4,7 @@ import SwiftUI
 /// Left side: small monitor icon. Right side: "WxH" current resolution text.
 /// Releasing the slider applies the selected mode.
 struct ResolutionSliderView: View {
-    @ObservedObject var display: DisplayInfo
+    @Bindable var display: DisplayInfo
     /// Index into display.availableModes
     @State private var sliderIndex: Double = 0
     @State private var isSwitching: Bool = false
@@ -55,7 +55,7 @@ struct ResolutionSliderView: View {
                     }
                 }
                 .disabled(modes.isEmpty || isSwitching)
-                .onReceive(display.$currentDisplayMode) { _ in
+                .onChange(of: display.currentDisplayMode?.id) { _, _ in
                     guard !isDragging else { return }
                     syncSliderToCurrentMode()
                 }

@@ -3,7 +3,7 @@ import SwiftUI
 /// Expandable section for ICC color profile selection.
 /// Lists all installed profiles alphabetically; highlights the active one.
 struct ColorProfileView: View {
-    @ObservedObject var display: DisplayInfo
+    @Bindable var display: DisplayInfo
     @State private var profiles: [ICCProfile] = []
     @State private var isLoading: Bool = false
     @State private var selectedPath: URL?
