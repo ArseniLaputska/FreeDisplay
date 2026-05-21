@@ -55,11 +55,63 @@ struct DisplayMode: Identifiable, Equatable {
 
         let maxPixelWidth = nativePixelWidth(from: rawModes)
 
+        func buildModes(requireDesktopUsable: Bool) -> [DisplayMode] {
+            var seen = Set<Int32>()
+            return rawModes.compactMap { mode -> DisplayMode? in
+                let modeID = mode.ioDisplayModeID
+                guard seen.insert(modeID).inserted else { return nil }  // deduplicate
+                if requireDesktopUsable, !mode.isUsableForDesktopGUI() { return nil }
+                guard mode.width >= 640, mode.height >= 480 else { return nil }
+
+                let w = mode.width
+                let h = mode.height
+                let pw = mode.pixelWidth
+                let ph = mode.pixelHeight
+                let refresh = mode.refreshRate
+
+                return DisplayMode(
+                    id: modeID,
+                    width: w,
+                    height: h,
+                    pixelWidth: pw,
+                    pixelHeight: ph,
+                    refreshRate: refresh,
+                    isHiDPI: pw > w,
+                    isNative: pw >= maxPixelWidth
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.width != rhs.width { return lhs.width > rhs.width }
+                if lhs.height != rhs.height { return lhs.height > rhs.height }
+                if lhs.refreshRate != rhs.refreshRate { return lhs.refreshRate > rhs.refreshRate }
+                if lhs.isHiDPI != rhs.isHiDPI { return lhs.isHiDPI }
+                return false
+            }
+        }
+
+        let usableModes = buildModes(requireDesktopUsable: true)
+        if !usableModes.isEmpty { return usableModes }
+
+        // Some HDMI/EDID paths report modes that `isUsableForDesktopGUI()` rejects even
+        // though System Settings can apply them. Keep a guarded fallback instead of
+        // showing an empty "No display modes available" panel.
+        return buildModes(requireDesktopUsable: false)
+    }
+
+    /// Returns all raw desktop-size modes, including modes CoreGraphics does not mark usable.
+    /// Useful for diagnostics and last-resort matching.
+    static func diagnosticModes(for displayID: CGDirectDisplayID) -> [DisplayMode] {
+        let options: CFDictionary = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+        guard let rawModes = CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode],
+              !rawModes.isEmpty else {
+            return []
+        }
+        let maxPixelWidth = nativePixelWidth(from: rawModes)
         var seen = Set<Int32>()
         return rawModes.compactMap { mode -> DisplayMode? in
             let modeID = mode.ioDisplayModeID
             guard seen.insert(modeID).inserted else { return nil }  // deduplicate
-            guard mode.isUsableForDesktopGUI() else { return nil }
+            guard mode.width >= 640, mode.height >= 480 else { return nil }
 
             let w = mode.width
             let h = mode.height

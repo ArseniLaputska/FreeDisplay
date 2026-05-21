@@ -5,8 +5,11 @@ import SwiftUI
 struct DisplayDetailView: View {
     @ObservedObject var display: DisplayInfo
     @EnvironmentObject var displayManager: DisplayManager
+    @ObservedObject private var ddcService = DDCService.shared
     @State private var showModeList: Bool = false
+    @State private var showDDCControl: Bool = false
     @State private var showColorProfile: Bool = false
+    @State private var showAdvancedDisplay: Bool = false
     @State private var showImageAdjustment: Bool = false
     @State private var colorSpaceName: String = ""
 
@@ -30,6 +33,27 @@ struct DisplayDetailView: View {
             // Brightness slider
             BrightnessSliderView(display: display)
 
+            if !display.isBuiltin {
+                Divider().opacity(0.3).padding(.vertical, 2)
+
+                ExpandableRow(
+                    icon: "slider.horizontal.below.rectangle",
+                    iconColor: .green,
+                    label: "DDC Control",
+                    subtitle: ddcSubtitle,
+                    isExpanded: $showDDCControl
+                )
+
+                if showDDCControl {
+                    DDCControlPanelView(display: display)
+                        .padding(.leading, 8)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .move(edge: .top)),
+                            removal: .opacity
+                        ))
+                }
+            }
+
             Divider().opacity(0.3).padding(.vertical, 2)
 
             // HiDPI toggle — before mode list (natural workflow: enable HiDPI → pick resolution)
@@ -38,7 +62,7 @@ struct DisplayDetailView: View {
             // Display mode list toggle row
             ExpandableRow(
                 icon: "rectangle.on.rectangle",
-                label: "显示模式",
+                label: "Display Mode",
                 subtitle: {
                     var parts: [String] = []
                     if let mode = display.currentDisplayMode {
@@ -67,7 +91,7 @@ struct DisplayDetailView: View {
             ExpandableRow(
                 icon: "paintpalette.fill",
                 iconColor: .purple,
-                label: "颜色描述文件",
+                label: "Color Profile",
                 subtitle: colorSpaceName,
                 isExpanded: $showColorProfile
             )
@@ -81,10 +105,27 @@ struct DisplayDetailView: View {
                     ))
             }
 
+            ExpandableRow(
+                icon: "waveform.path.ecg.rectangle",
+                iconColor: .teal,
+                label: "Advanced Display",
+                subtitle: "HDR / EDID",
+                isExpanded: $showAdvancedDisplay
+            )
+
+            if showAdvancedDisplay {
+                AdvancedDisplayPanelView(display: display)
+                    .padding(.leading, 8)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .top)),
+                        removal: .opacity
+                    ))
+            }
+
             // Image adjustment section
             ExpandableRow(
                 icon: "slider.horizontal.3",
-                label: "图像调整",
+                label: "Image Adjustments",
                 isExpanded: $showImageAdjustment
             )
 
@@ -110,17 +151,679 @@ struct DisplayDetailView: View {
         .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
         .onAppear {
             showModeList = loadExpanded("modeList", default: false)
+            showDDCControl = loadExpanded("ddcControl", default: false)
             showColorProfile = loadExpanded("colorProfile", default: false)
+            showAdvancedDisplay = loadExpanded("advancedDisplay", default: false)
             showImageAdjustment = loadExpanded("imageAdjust", default: false)
         }
         .onChange(of: showModeList) { _, v in saveExpanded("modeList", v) }
+        .onChange(of: showDDCControl) { _, v in saveExpanded("ddcControl", v) }
         .onChange(of: showColorProfile) { _, v in saveExpanded("colorProfile", v) }
+        .onChange(of: showAdvancedDisplay) { _, v in saveExpanded("advancedDisplay", v) }
         .onChange(of: showImageAdjustment) { _, v in saveExpanded("imageAdjust", v) }
         .task(id: display.displayID) {
+            if display.availableModes.isEmpty {
+                await display.loadDetails()
+            }
+
             colorSpaceName = ""
             guard !Task.isCancelled else { return }
-            colorSpaceName = ColorProfileService.shared.currentColorSpaceName(for: display.displayID)
+            let service = ColorProfileService.shared
+            if let url = service.currentProfileURL(for: display.displayID),
+               let profile = ColorProfileService.makeProfile(from: url) {
+                colorSpaceName = profile.name
+            } else {
+                colorSpaceName = service.currentColorSpaceName(for: display.displayID)
+            }
         }
+    }
+
+    private var ddcSubtitle: String {
+        if ddcService.ddcSuppressedDisplayIDs.contains(display.displayID)
+            || ddcService.isDDCReadSuppressed(for: display.displayID) {
+            return "Unavailable"
+        }
+        return BrightnessService.shared.isDDCAvailable(for: display.displayID) == true ? "Hardware" : "Diagnostics"
     }
 }
 
+// MARK: - DDCControlPanelView
+
+private struct DDCControlPanelView: View {
+    @ObservedObject var display: DisplayInfo
+
+    @State private var snapshots: [DDCService.VCPFeatureSnapshot] = []
+    @State private var isLoading: Bool = false
+    @State private var isRunningCommand: Bool = false
+    @State private var isDDCUnavailable: Bool = false
+    @State private var statusMessage: String?
+    @State private var contrast: Double = 50
+    @State private var volume: Double = 50
+    @State private var selectedInputID: UInt16 = DDCService.commonInputSources.first?.id ?? 0x11
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            commandHeader
+            contrastRow
+            volumeRow
+            inputRow
+            powerRow
+            diagnosticsRows
+        }
+        .task(id: display.displayID) {
+            await refreshDiagnostics()
+        }
+    }
+
+    private var commandHeader: some View {
+        HStack(spacing: 6) {
+            Text("DDC/CI")
+                .font(.caption)
+                .foregroundColor(isDDCUnavailable ? .red : .secondary)
+            Spacer()
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            Button {
+                Task { await refreshDiagnostics() }
+            } label: {
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(0.55)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(isLoading)
+            .help("Refresh DDC diagnostics")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    private var contrastRow: some View {
+        DDCSliderRow(
+            icon: "circle.righthalf.filled",
+            title: "Contrast",
+            value: $contrast,
+            isDisabled: isRunningCommand
+                || isDDCUnavailable
+        ) { value in
+            await writePercent(code: DDCService.contrastVCP, value: value, successText: "Contrast written")
+        }
+    }
+
+    private var volumeRow: some View {
+        DDCSliderRow(
+            icon: "speaker.wave.2.fill",
+            title: "Volume",
+            value: $volume,
+            isDisabled: isRunningCommand || isDDCUnavailable
+        ) { value in
+            await writePercent(code: DDCService.volumeVCP, value: value, successText: "Volume written")
+        }
+    }
+
+    private var inputRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "cable.connector")
+                .foregroundColor(.green)
+                .frame(width: 18)
+                .font(.caption)
+                .accessibilityHidden(true)
+
+            Text("Input")
+                .font(.caption)
+                .frame(width: 76, alignment: .leading)
+
+            Picker("", selection: $selectedInputID) {
+                ForEach(DDCService.commonInputSources) { source in
+                    Text(source.label).tag(source.id)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .disabled(isRunningCommand || isDDCUnavailable)
+
+            Button("Apply") {
+                Task {
+                    guard let source = DDCService.commonInputSources.first(where: { $0.id == selectedInputID }) else { return }
+                    await runCommand(successText: "Input written") {
+                        await DDCService.shared.setInputSource(source, displayID: display.displayID)
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .disabled(isRunningCommand || isDDCUnavailable)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+    }
+
+    private var powerRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "power")
+                .foregroundColor(.green)
+                .frame(width: 18)
+                .font(.caption)
+                .accessibilityHidden(true)
+
+            Text("Soft Off")
+                .font(.caption)
+                .frame(width: 76, alignment: .leading)
+
+            Button("Wake") {
+                Task {
+                    await runCommand(successText: "Wake command sent") {
+                        await DDCService.shared.setPowerMode(.on, displayID: display.displayID)
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .disabled(isRunningCommand || isDDCUnavailable)
+
+            Button("Standby") {
+                Task {
+                    await runCommand(successText: "Standby command sent") {
+                        await DDCService.shared.setPowerMode(.standby, displayID: display.displayID)
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .disabled(isRunningCommand || isDDCUnavailable)
+
+            Button("Off") {
+                Task {
+                    await runCommand(successText: "Off command sent") {
+                        await DDCService.shared.setPowerMode(.off, displayID: display.displayID)
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .foregroundStyle(.red)
+            .disabled(isRunningCommand || isDDCUnavailable)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+        .help("Sends DDC VCP 0xD6 power commands. This is not a true macOS disconnect.")
+    }
+
+    private var diagnosticsRows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if isDDCUnavailable {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .frame(width: 18)
+                        .font(.caption)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("DDC/CI unavailable on this link")
+                            .font(.caption)
+                        Text("Using software brightness")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            } else if snapshots.isEmpty && !isLoading {
+                Text("No DDC diagnostics yet")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            } else {
+                SectionBadgeSmall(title: "VCP Diagnostics")
+                ForEach(snapshots) { snapshot in
+                    DDCSnapshotRow(snapshot: snapshot)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func refreshDiagnostics() async {
+        guard !isLoading else { return }
+        isLoading = true
+        statusMessage = nil
+        if DDCService.shared.isDDCReadSuppressed(for: display.displayID) {
+            isDDCUnavailable = true
+            statusMessage = "DDC unavailable"
+            snapshots = DDCService.diagnosticFeatures.map {
+                DDCService.VCPFeatureSnapshot(feature: $0, current: nil, max: nil)
+            }
+            isLoading = false
+            return
+        }
+
+        let loaded = await DDCService.shared.readDiagnosticSnapshot(displayID: display.displayID)
+        snapshots = loaded
+        applySnapshotValues(loaded)
+        isDDCUnavailable = loaded.allSatisfy { $0.current == nil }
+            || DDCService.shared.isDDCReadSuppressed(for: display.displayID)
+        if isDDCUnavailable {
+            statusMessage = "DDC unavailable"
+        }
+        isLoading = false
+    }
+
+    @MainActor
+    private func writePercent(code: UInt8, value: Double, successText: String) async {
+        await runCommand(successText: successText) {
+            await DDCService.shared.writePercentVCP(
+                displayID: display.displayID,
+                command: code,
+                percent: value
+            )
+        }
+    }
+
+    @MainActor
+    private func runCommand(successText: String, action: @escaping () async -> Bool) async {
+        guard !isRunningCommand else { return }
+        guard !isDDCUnavailable else {
+            statusMessage = "DDC unavailable"
+            return
+        }
+        isRunningCommand = true
+        statusMessage = nil
+        let success = await action()
+        statusMessage = success ? successText : "DDC write failed"
+        isRunningCommand = false
+        if success {
+            await refreshDiagnostics()
+        }
+    }
+
+    private func applySnapshotValues(_ snapshots: [DDCService.VCPFeatureSnapshot]) {
+        for snapshot in snapshots {
+            guard let current = snapshot.current else { continue }
+            switch snapshot.feature.code {
+            case DDCService.contrastVCP:
+                contrast = percentValue(current: current, max: snapshot.max)
+            case DDCService.volumeVCP:
+                volume = percentValue(current: current, max: snapshot.max)
+            case DDCService.inputSourceVCP:
+                selectedInputID = current
+            default:
+                break
+            }
+        }
+    }
+
+    private func percentValue(current: UInt16, max maximum: UInt16?) -> Double {
+        guard let maximum, maximum > 0 else { return min(100.0, Double(current)) }
+        return min(100.0, Swift.max(0.0, Double(current) / Double(maximum) * 100.0))
+    }
+}
+
+private struct DDCSliderRow: View {
+    let icon: String
+    let title: LocalizedStringKey
+    @Binding var value: Double
+    let isDisabled: Bool
+    let onCommit: (Double) async -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundColor(.green)
+                .frame(width: 18)
+                .font(.caption)
+                .accessibilityHidden(true)
+
+            Text(title)
+                .font(.caption)
+                .frame(width: 76, alignment: .leading)
+
+            Slider(value: $value, in: 0...100, step: 1) { editing in
+                if !editing {
+                    Task { await onCommit(value) }
+                }
+            }
+            .disabled(isDisabled)
+
+            Text("\(Int(value))%")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 38, alignment: .trailing)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+    }
+}
+
+private struct SectionBadgeSmall: View {
+    let title: LocalizedStringKey
+
+    var body: some View {
+        Text(title)
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+    }
+}
+
+private struct DDCSnapshotRow: View {
+    let snapshot: DDCService.VCPFeatureSnapshot
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(snapshot.feature.codeString)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .monospaced()
+                .frame(width: 38, alignment: .leading)
+
+            Text(snapshot.feature.name)
+                .font(.caption)
+                .lineLimit(1)
+
+            Spacer()
+
+            Text(snapshot.valueString)
+                .font(.caption2)
+                .foregroundColor(snapshot.current == nil ? .red : .secondary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+    }
+}
+
+// MARK: - AdvancedDisplayPanelView
+
+private struct AdvancedDisplayPanelView: View {
+    @ObservedObject var display: DisplayInfo
+    @EnvironmentObject var displayManager: DisplayManager
+    @State private var state: AdvancedDisplayState?
+    @State private var statusMessage: String?
+    @State private var selectedOutputModeID: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Display Link")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                if let statusMessage {
+                    Text(statusMessage)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Button {
+                    refresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+
+            if let state {
+                AdvancedInfoRow(label: "Transport", value: state.colorTransport)
+                AdvancedInfoRow(label: "Pixel Encoding", value: state.pixelEncoding)
+                AdvancedInfoRow(label: "Bit Depth", value: "\(state.bitsPerChannel)-bit")
+                AdvancedInfoRow(label: "Range", value: state.dynamicRange)
+                AdvancedInfoRow(label: "EDR Current", value: String(format: "%.2fx", state.edrCurrent))
+                AdvancedInfoRow(label: "EDR Potential", value: String(format: "%.2fx", state.edrPotential))
+                AdvancedInfoRow(label: "CoreDisplay", value: state.coreDisplayAvailable ? "Loaded" : "Unavailable")
+                AdvancedInfoRow(label: "HDR Support", value: boolText(state.hdrSupported))
+                AdvancedInfoRow(label: "HDR State", value: boolText(state.hdrEnabled))
+                AdvancedInfoRow(label: "Private EDR", value: boolText(state.edrEnabled))
+                AdvancedInfoRow(label: "Headroom", value: headroomText(state))
+                AdvancedInfoRow(label: "Nits", value: nitsText(state))
+                AdvancedInfoRow(label: "Vendor/Product", value: "\(state.vendorID) / \(state.productID)")
+                AdvancedInfoRow(label: "Serial", value: "\(state.serialID)")
+                AdvancedInfoRow(
+                    label: "Output Modes",
+                    value: state.outputModes.isEmpty ? "Unavailable" : "\(state.outputModes.count)"
+                )
+
+                if !state.outputModes.isEmpty {
+                    outputModeRow(state)
+                }
+
+                HStack(spacing: 8) {
+                    Button(state.hdrEnabled == true ? "Disable HDR" : "Enable HDR") {
+                        let next = !(state.hdrEnabled ?? false)
+                        let ok = AdvancedDisplayService.shared.setHDRMode(next, for: display.displayID)
+                        statusMessage = ok ? "HDR toggled" : "HDR private API disabled"
+                        refresh()
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!state.canSetHDR || state.hdrSupported == false)
+
+                    Button("Max Headroom") {
+                        let target = max(state.potentialHeadroom ?? state.edrPotential, 1.0)
+                        let ok = AdvancedDisplayService.shared.requestHeadroom(target, for: display.displayID)
+                        statusMessage = ok ? "Max headroom requested" : "Headroom API disabled"
+                        refresh()
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!state.canRequestHeadroom)
+
+                    Button("Reset Headroom") {
+                        let ok = AdvancedDisplayService.shared.requestHeadroom(1.0, for: display.displayID)
+                        statusMessage = ok ? "Headroom reset" : "Headroom API disabled"
+                        refresh()
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!state.canRequestHeadroom)
+
+                    Button("Soft Disconnect") {
+                        let ok = AdvancedDisplayService.shared.softDisconnect(display: display)
+                        statusMessage = ok ? "Display disabled" : "Soft disconnect unavailable"
+                        if ok {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                                displayManager.refreshDisplays()
+                            }
+                        } else {
+                            refresh()
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .foregroundStyle(.red)
+                    .disabled(!state.canSoftDisconnect)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+
+                HStack(spacing: 8) {
+                    Button("System Color") {
+                        forceColorMode(0)
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!state.canForceColorOutput)
+
+                    Button("Force RGB") {
+                        forceColorMode(1)
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!state.canForceColorOutput)
+
+                    Button("Force YCbCr") {
+                        forceColorMode(2)
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!state.canForceColorOutput)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+
+                HStack(spacing: 8) {
+                    Button("Copy EDID") {
+                        let ok = AdvancedDisplayService.shared.copyEDIDHex(for: display.displayID)
+                        statusMessage = ok ? "EDID copied" : "No EDID"
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .disabled(!state.hasEDID)
+
+                    Button("Software Boost") {
+                        let adj = GammaAdjustment(gain: 20)
+                        GammaService.shared.apply(adj, for: display.displayID)
+                        statusMessage = "Software boost applied"
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+
+                    Button("Reset") {
+                        GammaService.shared.resetSingleDisplay(display.displayID)
+                        statusMessage = "Reset"
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            } else {
+                Text("Reading...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
+        }
+        .task(id: display.displayID) {
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
+            refresh()
+        }
+    }
+
+    @ViewBuilder
+    private func outputModeRow(_ state: AdvancedDisplayState) -> some View {
+        let selected = state.outputModes.first { $0.id == selectedOutputModeID }
+            ?? state.outputModes.first(where: \.isActive)
+            ?? state.outputModes.first
+
+        HStack(spacing: 8) {
+            Text("Output")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 96, alignment: .leading)
+
+            Picker("", selection: $selectedOutputModeID) {
+                ForEach(state.outputModes) { mode in
+                    Text(mode.label).tag(mode.id)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .frame(maxWidth: 110)
+
+            Button("Apply") {
+                applySelectedOutputMode(state)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .disabled(!state.canSetOutputMode || selected == nil)
+            .help(selected?.tokenDescription ?? "No output mode selected")
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+
+        if let selected {
+            AdvancedInfoRow(label: "Output Token", value: selected.tokenDescription)
+        }
+    }
+
+    private func refresh() {
+        let next = AdvancedDisplayService.shared.state(for: display.displayID)
+        state = next
+        if selectedOutputModeID.isEmpty || !next.outputModes.contains(where: { $0.id == selectedOutputModeID }) {
+            selectedOutputModeID = next.outputModes.first(where: \.isActive)?.id ?? next.outputModes.first?.id ?? ""
+        }
+    }
+
+    private func applySelectedOutputMode(_ state: AdvancedDisplayState) {
+        guard let mode = state.outputModes.first(where: { $0.id == selectedOutputModeID }) else {
+            statusMessage = "No output mode selected"
+            return
+        }
+        let ok = AdvancedDisplayService.shared.setOutputMode(mode, for: display.displayID)
+        statusMessage = ok ? "Output mode applied" : "Output mode failed"
+        refresh()
+    }
+
+    private func forceColorMode(_ rawMode: Int32) {
+        let ok = AdvancedDisplayService.shared.forceColorOutput(rawMode, for: display.displayID)
+        statusMessage = ok ? "Color command sent" : "Color private API unavailable"
+        refresh()
+    }
+
+    private func boolText(_ value: Bool?) -> String {
+        guard let value else { return "Unknown" }
+        return value ? "Yes" : "No"
+    }
+
+    private func headroomText(_ state: AdvancedDisplayState) -> String {
+        let current = state.currentHeadroom.map { String(format: "%.2fx", $0) } ?? "?"
+        let potential = state.potentialHeadroom.map { String(format: "%.2fx", $0) } ?? "?"
+        let reference = state.referenceHeadroom.map { String(format: "%.2fx", $0) } ?? "?"
+        return "\(current) / \(potential) / ref \(reference)"
+    }
+
+    private func nitsText(_ state: AdvancedDisplayState) -> String {
+        let current = state.displayNits.map { String(format: "%.0f", $0) } ?? "?"
+        let nominal = state.nominalPixelNits.map { String(format: "%.0f", $0) } ?? "?"
+        return "\(current) / nominal \(nominal)"
+    }
+}
+
+private struct AdvancedInfoRow: View {
+    let label: LocalizedStringKey
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 96, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+    }
+}

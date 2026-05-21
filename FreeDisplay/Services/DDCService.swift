@@ -5,9 +5,6 @@ import IOKit
 import IOKit.i2c
 import IOKit.graphics
 
-@_silgen_name("CGDisplayIOServicePort")
-private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
-
 /// DDC/CI I2C communication service for external displays.
 /// Supports two hardware paths:
 ///   - ARM64 (Apple Silicon): IOAVService via DCPAVServiceProxy
@@ -19,7 +16,78 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     // VCP feature codes (DDC/CI standard)
     static let brightnessVCP: UInt8 = 0x10
     static let contrastVCP: UInt8   = 0x12
+    static let volumeVCP: UInt8     = 0x62
+    static let inputSourceVCP: UInt8 = 0x60
     static let powerVCP: UInt8      = 0xD6
+
+    struct VCPFeature: Identifiable, Equatable, Sendable {
+        let code: UInt8
+        let name: String
+        let isWritable: Bool
+
+        var id: UInt8 { code }
+        var codeString: String { String(format: "0x%02X", code) }
+    }
+
+    struct VCPFeatureSnapshot: Identifiable, Sendable {
+        let feature: VCPFeature
+        let current: UInt16?
+        let max: UInt16?
+
+        var id: UInt8 { feature.code }
+
+        var valueString: String {
+            guard let current else { return "—" }
+            if let max, max > 0 {
+                return "\(current) / \(max)"
+            }
+            return "\(current)"
+        }
+    }
+
+    enum PowerMode: UInt16, CaseIterable, Identifiable, Sendable {
+        case on = 0x01
+        case standby = 0x02
+        case suspend = 0x03
+        case off = 0x04
+
+        var id: UInt16 { rawValue }
+
+        var label: String {
+            switch self {
+            case .on: return String(localized: "Wake")
+            case .standby: return String(localized: "Standby")
+            case .suspend: return String(localized: "Suspend")
+            case .off: return String(localized: "Off")
+            }
+        }
+    }
+
+    struct InputSource: Identifiable, Equatable, Sendable {
+        let id: UInt16
+        let label: String
+    }
+
+    static let commonInputSources: [InputSource] = [
+        InputSource(id: 0x0F, label: "DisplayPort 1"),
+        InputSource(id: 0x10, label: "DisplayPort 2"),
+        InputSource(id: 0x11, label: "HDMI 1"),
+        InputSource(id: 0x12, label: "HDMI 2"),
+        InputSource(id: 0x1B, label: "USB-C"),
+    ]
+
+    static let diagnosticFeatures: [VCPFeature] = [
+        VCPFeature(code: 0x10, name: String(localized: "Brightness"), isWritable: true),
+        VCPFeature(code: 0x12, name: String(localized: "Contrast"), isWritable: true),
+        VCPFeature(code: 0x14, name: String(localized: "Red gain"), isWritable: true),
+        VCPFeature(code: 0x16, name: String(localized: "Green gain"), isWritable: true),
+        VCPFeature(code: 0x18, name: String(localized: "Blue gain"), isWritable: true),
+        VCPFeature(code: 0x60, name: String(localized: "Input source"), isWritable: true),
+        VCPFeature(code: 0x62, name: String(localized: "Volume"), isWritable: true),
+        VCPFeature(code: 0x87, name: String(localized: "Capabilities"), isWritable: false),
+        VCPFeature(code: 0xD6, name: String(localized: "Power mode"), isWritable: true),
+        VCPFeature(code: 0xDC, name: String(localized: "Display technology"), isWritable: false),
+    ]
 
     private let ddcQueue = DispatchQueue(label: "com.freedisplay.ddc", qos: .userInitiated)
 
@@ -33,7 +101,9 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     }
 
     private var vcpCache: [CGDirectDisplayID: [UInt8: VCPCacheEntry]] = [:]
+    private var readSuppressedUntil: [CGDirectDisplayID: Date] = [:]
     private let cacheLock = NSLock()
+    private let invalidReplyCooldown: TimeInterval = 30.0
 
     // MARK: - IOAVService Cache (ARM64 only)
 
@@ -46,6 +116,22 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
     private init() {}
 
+    private func completeOnMain(_ completion: (@Sendable (Bool) -> Void)?, _ value: Bool) {
+        guard let completion else { return }
+        DispatchQueue.main.async {
+            completion(value)
+        }
+    }
+
+    private func completeOnMain(
+        _ completion: @escaping @Sendable ((current: UInt16, max: UInt16)?) -> Void,
+        _ value: (current: UInt16, max: UInt16)?
+    ) {
+        DispatchQueue.main.async {
+            completion(value)
+        }
+    }
+
     // MARK: - ARM64 IOAVService Path
 
 #if arch(arm64)
@@ -54,6 +140,7 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// Mapping warning exposed to UI when more than one external display is connected
     /// and we fall back to index-based AVService assignment.
     @Published var mappingWarning: String? = nil
+    @Published private(set) var ddcSuppressedDisplayIDs: Set<CGDirectDisplayID> = []
 
     /// Attempts to match an IOAVService (DCPAVServiceProxy) to a CGDirectDisplayID by
     /// comparing IORegistry properties against CoreGraphics display attributes.
@@ -240,7 +327,8 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                 continue
             }
 
-            // Verify the service responds to I2C reads (confirms it's a usable DDC path)
+            // Verify the service responds to I2C reads. A successful raw I2C read only
+            // means the transport exists; VCP packet validation happens in arm64Read.
             var testBuf = [UInt8](repeating: 0, count: 32)
             let ret = IOAVServiceReadI2C(avService, 0x37, 0x51, &testBuf, 32)
             if ret == kIOReturnSuccess {
@@ -370,14 +458,42 @@ final class DDCService: ObservableObject, @unchecked Sendable {
         //   replyBuf[8] = current value high byte
         //   replyBuf[9] = current value low byte
         //  replyBuf[10] = checksum
-        guard replyBuf.count >= 10 else { return nil }
+        guard isValidArm64VCPReply(replyBuf, command: command) else {
+            noteInvalidArm64Reply(displayID: displayID, command: command, bytes: replyBuf)
+            return nil
+        }
 
         let maxVal = (UInt16(replyBuf[6]) << 8) | UInt16(replyBuf[7])
         let curVal = (UInt16(replyBuf[8]) << 8) | UInt16(replyBuf[9])
+        guard maxVal > 0, curVal <= maxVal else {
+            noteInvalidArm64Reply(displayID: displayID, command: command, bytes: replyBuf)
+            return nil
+        }
         #if DEBUG
         print("[DDCService] ARM64 read VCP 0x\(String(command, radix: 16)): cur=\(curVal) max=\(maxVal)")
         #endif
         return (current: curVal, max: maxVal)
+    }
+
+    private func isValidArm64VCPReply(_ bytes: [UInt8], command: UInt8) -> Bool {
+        guard bytes.count >= 11 else { return false }
+        guard bytes[0] == 0x6E else { return false }
+        guard bytes[1] & 0x80 == 0x80, bytes[1] & 0x7F >= 0x08 else { return false }
+        guard bytes[2] == 0x02 else { return false }
+        guard bytes[3] == 0x00 else { return false }
+        guard bytes[4] == command else { return false }
+        let packetLength = min(bytes.count, Int((bytes[1] & 0x7F) + 3))
+        guard packetLength >= 11 else { return false }
+        let checksum = bytes.prefix(packetLength).reduce(UInt8(0), ^)
+        return checksum == 0
+    }
+
+    private func noteInvalidArm64Reply(displayID: CGDirectDisplayID, command: UInt8, bytes: [UInt8]) {
+        suppressDDCReads(for: displayID, seconds: invalidReplyCooldown)
+        #if DEBUG
+        let hex = bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
+        print("[DDCService] ARM64 invalid DDC/CI reply for display \(displayID) VCP 0x\(String(command, radix: 16)); suppressing reads for \(Int(invalidReplyCooldown))s bytes=[\(hex)]")
+        #endif
     }
 #endif
 
@@ -386,8 +502,8 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     /// Finds the IOFramebuffer service for a given external display.
     /// Returns a retained io_service_t — caller must IOObjectRelease.
     private func framebufferService(for displayID: CGDirectDisplayID) -> io_service_t? {
-        // Strategy 1: Use CGDisplayIOServicePort (deprecated but functional on macOS 15)
-        let servicePort = CGDisplayIOServicePort(displayID)
+        // Strategy 1: Use CGDisplayIOServicePort (runtime-loaded private CoreGraphics symbol)
+        let servicePort = CGPrivate.ioServicePort(for: displayID)
         if servicePort != MACH_PORT_NULL && servicePort != 0 {
             var parent: io_service_t = 0
             if IORegistryEntryGetParentEntry(servicePort, kIOServicePlane, &parent) == KERN_SUCCESS, parent != 0 {
@@ -609,7 +725,9 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     func clearCache(for displayID: CGDirectDisplayID) {
         cacheLock.lock()
         vcpCache.removeValue(forKey: displayID)
+        readSuppressedUntil.removeValue(forKey: displayID)
         cacheLock.unlock()
+        clearDDCSuppressionIndicator(for: displayID)
 #if arch(arm64)
         invalidateAVServiceCache(for: displayID)
 #endif
@@ -617,13 +735,53 @@ final class DDCService: ObservableObject, @unchecked Sendable {
 
     // MARK: - Public Async API (with retry)
 
+    private func suppressDDCReads(for displayID: CGDirectDisplayID, seconds: TimeInterval) {
+        cacheLock.withLock {
+            readSuppressedUntil[displayID] = Date().addingTimeInterval(seconds)
+        }
+        DispatchQueue.main.async {
+            self.ddcSuppressedDisplayIDs.insert(displayID)
+        }
+    }
+
+    func isDDCReadSuppressed(for displayID: CGDirectDisplayID) -> Bool {
+        cacheLock.withLock {
+            guard let until = readSuppressedUntil[displayID] else { return false }
+            if until > Date() {
+                return true
+            }
+            readSuppressedUntil.removeValue(forKey: displayID)
+            clearDDCSuppressionIndicator(for: displayID)
+            return false
+        }
+    }
+
+    func ddcReadSuppressionRemaining(for displayID: CGDirectDisplayID) -> TimeInterval {
+        cacheLock.withLock {
+            guard let until = readSuppressedUntil[displayID] else { return 0 }
+            let remaining = until.timeIntervalSinceNow
+            if remaining > 0 {
+                return remaining
+            }
+            readSuppressedUntil.removeValue(forKey: displayID)
+            clearDDCSuppressionIndicator(for: displayID)
+            return 0
+        }
+    }
+
+    private func clearDDCSuppressionIndicator(for displayID: CGDirectDisplayID) {
+        DispatchQueue.main.async {
+            self.ddcSuppressedDisplayIDs.remove(displayID)
+        }
+    }
+
     /// Asynchronously write a VCP value, retrying up to 3 times.
     /// Invalidates the cache for the written VCP code on success.
     func writeAsync(
         displayID: CGDirectDisplayID,
         command: UInt8,
         value: UInt16,
-        completion: ((Bool) -> Void)? = nil
+        completion: (@Sendable (Bool) -> Void)? = nil
     ) {
         ddcQueue.async {
             for attempt in 0..<3 {
@@ -632,12 +790,12 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                     self.cacheLock.lock()
                     self.vcpCache[displayID]?[command] = nil
                     self.cacheLock.unlock()
-                    completion?(true)
+                    self.completeOnMain(completion, true)
                     return
                 }
                 if attempt < 2 { Thread.sleep(forTimeInterval: 0.05) }
             }
-            completion?(false)
+            self.completeOnMain(completion, false)
         }
     }
 
@@ -646,19 +804,25 @@ final class DDCService: ObservableObject, @unchecked Sendable {
     func readAsync(
         displayID: CGDirectDisplayID,
         command: UInt8,
-        completion: @escaping ((current: UInt16, max: UInt16)?) -> Void
+        completion: @escaping @Sendable ((current: UInt16, max: UInt16)?) -> Void
     ) {
+        guard !isDDCReadSuppressed(for: displayID) else {
+            completeOnMain(completion, nil)
+            return
+        }
+
         // Fast path: return cached value if still fresh
         cacheLock.lock()
         if let entry = vcpCache[displayID]?[command], !entry.isExpired {
             cacheLock.unlock()
-            completion((current: entry.current, max: entry.max))
+            completeOnMain(completion, (current: entry.current, max: entry.max))
             return
         }
         cacheLock.unlock()
 
         ddcQueue.async {
             for attempt in 0..<3 {
+                if self.isDDCReadSuppressed(for: displayID) { break }
                 if let r = self.readSynchronous(displayID: displayID, command: command) {
                     self.cacheLock.lock()
                     if self.vcpCache[displayID] == nil { self.vcpCache[displayID] = [:] }
@@ -666,13 +830,70 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                         current: r.current, max: r.max, timestamp: Date()
                     )
                     self.cacheLock.unlock()
-                    completion(r)
+                    self.completeOnMain(completion, r)
                     return
                 }
                 if attempt < 2 { Thread.sleep(forTimeInterval: 0.05) }
             }
-            completion(nil)
+            self.completeOnMain(completion, nil)
         }
+    }
+
+    /// Async wrapper for a single VCP read.
+    func readVCP(displayID: CGDirectDisplayID, command: UInt8) async -> (current: UInt16, max: UInt16)? {
+        await withCheckedContinuation { continuation in
+            readAsync(displayID: displayID, command: command) { result in
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    /// Async wrapper for a single VCP write.
+    func writeVCP(displayID: CGDirectDisplayID, command: UInt8, value: UInt16) async -> Bool {
+        await withCheckedContinuation { continuation in
+            writeAsync(displayID: displayID, command: command, value: value) { success in
+                continuation.resume(returning: success)
+            }
+        }
+    }
+
+    /// Writes a percentage-style VCP code using the monitor's reported max when possible.
+    func writePercentVCP(displayID: CGDirectDisplayID, command: UInt8, percent: Double) async -> Bool {
+        let clamped = max(0.0, min(100.0, percent))
+        let maxValue = await readVCP(displayID: displayID, command: command)?.max ?? 100
+        let nativeValue = UInt16((clamped / 100.0) * Double(max(maxValue, 1)))
+        return await writeVCP(displayID: displayID, command: command, value: nativeValue)
+    }
+
+    /// Writes VCP 0xD6. This is "soft power", not a real macOS display disconnect.
+    func setPowerMode(_ mode: PowerMode, displayID: CGDirectDisplayID) async -> Bool {
+        await writeVCP(displayID: displayID, command: Self.powerVCP, value: mode.rawValue)
+    }
+
+    func setInputSource(_ source: InputSource, displayID: CGDirectDisplayID) async -> Bool {
+        await writeVCP(displayID: displayID, command: Self.inputSourceVCP, value: source.id)
+    }
+
+    func readDiagnosticSnapshot(displayID: CGDirectDisplayID) async -> [VCPFeatureSnapshot] {
+        guard !isDDCReadSuppressed(for: displayID),
+              await readVCP(displayID: displayID, command: Self.brightnessVCP) != nil else {
+            return Self.diagnosticFeatures.map {
+                VCPFeatureSnapshot(feature: $0, current: nil, max: nil)
+            }
+        }
+
+        var snapshots: [VCPFeatureSnapshot] = []
+        for feature in Self.diagnosticFeatures {
+            let value = await readVCP(displayID: displayID, command: feature.code)
+            snapshots.append(
+                VCPFeatureSnapshot(
+                    feature: feature,
+                    current: value?.current,
+                    max: value?.max
+                )
+            )
+        }
+        return snapshots
     }
 
     /// Reads a batch of common VCP codes asynchronously.
@@ -717,6 +938,10 @@ final class DDCService: ObservableObject, @unchecked Sendable {
                 // Every code ends up in result: success → .some(value), failure → .none.
                 for code in codes {
                     if cachedCodes.contains(code) { continue }
+                    if self.isDDCReadSuppressed(for: displayID) {
+                        result[code] = nil
+                        continue
+                    }
                     if let r = self.readSynchronous(displayID: displayID, command: code) {
                         result[code] = r.current
                         self.cacheLock.lock()

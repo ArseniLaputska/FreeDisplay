@@ -5,7 +5,13 @@ import CoreGraphics
 // CoreDisplay private API — reads the user-set brightness of a display (0.0–1.0).
 // Loaded via dlsym at runtime to avoid linking against the private CoreDisplay framework.
 private let _CoreDisplay_GetBrightness: (@convention(c) (CGDirectDisplayID) -> Double)? = {
-    guard let handle = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY) else { return nil }
+    let candidates = [
+        "/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay",
+        "/System/Library/PrivateFrameworks/CoreDisplay.framework/CoreDisplay",
+        "CoreDisplay.framework/CoreDisplay",
+    ]
+    let handle = candidates.lazy.compactMap { dlopen($0, RTLD_LAZY) }.first
+    guard let handle else { return nil }
     guard let sym = dlsym(handle, "CoreDisplay_Display_GetUserBrightness") else { return nil }
     return unsafeBitCast(sym, to: (@convention(c) (CGDirectDisplayID) -> Double).self)
 }()

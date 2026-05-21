@@ -62,7 +62,7 @@ struct ResolutionSliderView: View {
                 .onAppear {
                     syncSliderToCurrentMode()
                 }
-                .help("拖动选择分辨率")
+                .help("Drag to choose resolution")
 
                 Text(previewModeFullString)
                     .font(.caption)
@@ -73,11 +73,11 @@ struct ResolutionSliderView: View {
                     .animation(.easeInOut(duration: 0.15), value: sliderIndex)
             }
 
-            // Milestone labels: 最低 / 推荐 / 最高
+            // Milestone labels: lowest / recommended / highest
             if modes.count > 1 {
                 HStack(spacing: 0) {
                     // Modes are sorted descending: index 0 = highest resolution (left), last = lowest (right)
-                    Text("最高")
+                    Text("Highest")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Spacer()
@@ -91,7 +91,7 @@ struct ResolutionSliderView: View {
                                 Circle()
                                     .fill(Color.accentColor)
                                     .frame(width: 4, height: 4)
-                                Text("推荐")
+                                Text("Recommended")
                                     .font(.caption2)
                                     .foregroundColor(.accentColor)
                             }
@@ -101,7 +101,7 @@ struct ResolutionSliderView: View {
                     } else {
                         Spacer()
                     }
-                    Text("最低")
+                    Text("Lowest")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -131,7 +131,7 @@ struct ResolutionSliderView: View {
                 errorMessage = nil
             } else {
                 syncSliderToCurrentMode()
-                errorMessage = String(localized: "切换失败，请重试")
+                errorMessage = String(localized: "Switch failed, please try again")
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     errorMessage = nil

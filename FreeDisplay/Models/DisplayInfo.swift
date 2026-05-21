@@ -52,9 +52,11 @@ class DisplayInfo: ObservableObject, Identifiable {
         self.bounds = CGDisplayBounds(displayID)
         self.pixelWidth = CGDisplayPixelsWide(displayID)
         self.pixelHeight = CGDisplayPixelsHigh(displayID)
-        // Use persisted brightness as the initial value if available, otherwise 50.0.
+        // Use persisted brightness as the initial value if available.
+        // External displays without a readable DDC value should start at 100%, otherwise
+        // touching the slider can unexpectedly dim a physically-bright monitor to 50%.
         // BrightnessService will overwrite this with the real hardware value once probed.
-        self.brightness = SettingsService.shared.brightness(for: displayID) ?? 50.0
+        self.brightness = SettingsService.shared.brightness(for: displayID) ?? (builtin ? 50.0 : 100.0)
         self.availableModes = []
         self.currentDisplayMode = DisplayMode.currentMode(for: displayID)
         let vendor = CGDisplayVendorNumber(displayID)
@@ -64,7 +66,7 @@ class DisplayInfo: ObservableObject, Identifiable {
         self.serialNumber = CGDisplaySerialNumber(displayID)
 
         if builtin {
-            self.name = String(localized: "内建显示屏")
+            self.name = String(localized: "Built-in Display")
         } else {
             self.name = NSScreen.screen(for: displayID)?.localizedName ?? "Display \(displayID)"
         }
@@ -74,10 +76,14 @@ class DisplayInfo: ObservableObject, Identifiable {
     func loadDetails() async {
         let displayID = self.displayID
 
-        let modes = await Task.detached(priority: .userInitiated) {
+        async let modes = Task.detached(priority: .userInitiated) {
             DisplayMode.availableModes(for: displayID)
         }.value
+        async let current = Task.detached(priority: .userInitiated) {
+            DisplayMode.currentMode(for: displayID)
+        }.value
 
-        self.availableModes = modes
+        self.availableModes = await modes
+        self.currentDisplayMode = await current
     }
 }

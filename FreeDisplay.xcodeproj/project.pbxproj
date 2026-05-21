@@ -253,11 +253,6 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
-				TargetAttributes = {
-					9433F0A8DC2A280F3C43CD1C = {
-						DevelopmentTeam = 29W56PHWJR;
-					};
-				};
 			};
 			buildConfigurationList = 8EA410054BD32F42B7BB9BC3 /* Build configuration list for PBXProject "FreeDisplay" */;
 			developmentRegion = en;
@@ -409,7 +404,7 @@
 				CODE_SIGN_ENTITLEMENTS = FreeDisplay/FreeDisplay.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 29W56PHWJR;
+				DEVELOPMENT_TEAM = TSDW7DG47P;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;
@@ -436,7 +431,7 @@
 				CODE_SIGN_ENTITLEMENTS = FreeDisplay/FreeDisplay.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = 29W56PHWJR;
+				DEVELOPMENT_TEAM = TSDW7DG47P;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSUIElement = YES;

@@ -7,6 +7,14 @@ final class HiDPIService: @unchecked Sendable {
     static let shared = HiDPIService()
     private init() {}
 
+    struct LogicalResolution: Identifiable, Codable, Equatable, Sendable {
+        var width: Int
+        var height: Int
+
+        var id: String { "\(width)x\(height)" }
+        var label: String { "\(width)×\(height)" }
+    }
+
     private var refreshTask: Task<Void, Never>?
 
     private let overridesBase = URL(fileURLWithPath: "/Library/Displays/Contents/Resources/Overrides")
@@ -34,13 +42,26 @@ final class HiDPIService: @unchecked Sendable {
                      nativeWidth: Int,
                      nativeHeight: Int) async -> String? {
         return enableHiDPIPlist(vendor: vendor, product: product,
-                                nativeWidth: nativeWidth, nativeHeight: nativeHeight)
+                                nativeWidth: nativeWidth, nativeHeight: nativeHeight,
+                                customLogicalModes: nil)
+    }
+
+    func enableHiDPI(for displayID: CGDirectDisplayID,
+                     vendor: UInt32,
+                     product: UInt32,
+                     nativeWidth: Int,
+                     nativeHeight: Int,
+                     customLogicalModes: [LogicalResolution]) async -> String? {
+        return enableHiDPIPlist(vendor: vendor, product: product,
+                                nativeWidth: nativeWidth, nativeHeight: nativeHeight,
+                                customLogicalModes: customLogicalModes)
     }
 
     /// Legacy single-path enable (plist only).
     func enableHiDPI(vendor: UInt32, product: UInt32, nativeWidth: Int, nativeHeight: Int) -> String? {
         enableHiDPIPlist(vendor: vendor, product: product,
-                         nativeWidth: nativeWidth, nativeHeight: nativeHeight)
+                         nativeWidth: nativeWidth, nativeHeight: nativeHeight,
+                         customLogicalModes: nil)
     }
 
     /// Disables HiDPI for an external display by removing the plist override.
@@ -76,17 +97,22 @@ final class HiDPIService: @unchecked Sendable {
     // MARK: - Plist Override
 
     private func enableHiDPIPlist(vendor: UInt32, product: UInt32,
-                                   nativeWidth: Int, nativeHeight: Int) -> String? {
+                                   nativeWidth: Int, nativeHeight: Int,
+                                   customLogicalModes: [LogicalResolution]?) -> String? {
         let dirPath = overrideDir(vendor: vendor).path
         let plistPath = overridePlistURL(vendor: vendor, product: product).path
 
-        let scaledModes = generateScaledModes(nativeWidth: nativeWidth, nativeHeight: nativeHeight)
+        let scaledModes = generateScaledModes(
+            nativeWidth: nativeWidth,
+            nativeHeight: nativeHeight,
+            customLogicalModes: customLogicalModes
+        )
         let plist: [String: Any] = [
             "scale-resolutions": scaledModes
         ]
 
         guard let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else {
-            return String(localized: "生成 Plist 数据失败")
+            return String(localized: "Failed to generate plist data")
         }
 
         // Write to a temp file first, then use privileged helper to move it
@@ -94,7 +120,7 @@ final class HiDPIService: @unchecked Sendable {
         do {
             try data.write(to: URL(fileURLWithPath: tmpPath), options: .atomic)
         } catch {
-            return String(localized: "写入临时文件失败：\(error.localizedDescription)")
+            return String(localized: "Failed to write temporary file: \(error.localizedDescription)")
         }
 
         // Use AppleScript to get admin privileges for writing to /Library/Displays/
@@ -131,15 +157,15 @@ final class HiDPIService: @unchecked Sendable {
             """
         var error: NSDictionary?
         guard let appleScript = NSAppleScript(source: script) else {
-            return String(localized: "创建 AppleScript 失败")
+            return String(localized: "Failed to create AppleScript")
         }
         appleScript.executeAndReturnError(&error)
         if let error = error {
-            let msg = error[NSAppleScript.errorMessage] as? String ?? String(localized: "未知错误")
+            let msg = error[NSAppleScript.errorMessage] as? String ?? String(localized: "Unknown error")
             if msg.contains("canceled") || msg.contains("Cancel") {
-                return String(localized: "用户取消了授权")
+                return String(localized: "Authorization canceled")
             }
-            return String(localized: "管理员授权失败：\(msg)")
+            return String(localized: "Administrator authorization failed: \(msg)")
         }
         return nil
     }
@@ -194,7 +220,11 @@ final class HiDPIService: @unchecked Sendable {
             .appendingPathComponent(String(format: "DisplayProductID-%x", product))
     }
 
-    private func generateScaledModes(nativeWidth: Int, nativeHeight: Int) -> [Data] {
+    private func generateScaledModes(
+        nativeWidth: Int,
+        nativeHeight: Int,
+        customLogicalModes: [LogicalResolution]?
+    ) -> [Data] {
         // Generate HiDPI modes: each entry is 8 bytes big-endian (backingW, backingH)
         // For a 2560×1440 display, we want:
         //   1920×1080 HiDPI (backing 3840×2160)
@@ -203,19 +233,31 @@ final class HiDPIService: @unchecked Sendable {
         //   native as HiDPI (backing 5120×2880)
         var resolutions: [(Int, Int)] = []
 
-        // Native resolution as HiDPI (2x backing)
-        resolutions.append((nativeWidth * 2, nativeHeight * 2))
+        if let customLogicalModes, !customLogicalModes.isEmpty {
+            for mode in customLogicalModes {
+                let logicalW = mode.width & ~1
+                let logicalH = mode.height & ~1
+                guard logicalW >= 800, logicalH >= 600 else { continue }
+                resolutions.append((logicalW * 2, logicalH * 2))
+            }
+        } else {
+            // Native resolution as HiDPI (2x backing)
+            resolutions.append((nativeWidth * 2, nativeHeight * 2))
 
-        // Scaled HiDPI modes
-        let scales: [Double] = [0.75, 0.625, 0.5]
-        for scale in scales {
-            let logicalW = Int((Double(nativeWidth) * scale).rounded()) & ~1
-            let logicalH = Int((Double(nativeHeight) * scale).rounded()) & ~1
-            guard logicalW >= 800, logicalH >= 600 else { continue }
-            resolutions.append((logicalW * 2, logicalH * 2))
+            // Scaled HiDPI modes
+            let scales: [Double] = [0.75, 0.625, 0.5]
+            for scale in scales {
+                let logicalW = Int((Double(nativeWidth) * scale).rounded()) & ~1
+                let logicalH = Int((Double(nativeHeight) * scale).rounded()) & ~1
+                guard logicalW >= 800, logicalH >= 600 else { continue }
+                resolutions.append((logicalW * 2, logicalH * 2))
+            }
         }
 
-        return resolutions.map { (backingW, backingH) in
+        var seen = Set<String>()
+        return resolutions.filter { backingW, backingH in
+            seen.insert("\(backingW)x\(backingH)").inserted
+        }.map { (backingW, backingH) in
             var bytes = [UInt8](repeating: 0, count: 8)
             bytes[0] = UInt8((backingW >> 24) & 0xFF)
             bytes[1] = UInt8((backingW >> 16) & 0xFF)

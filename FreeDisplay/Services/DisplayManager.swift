@@ -70,7 +70,7 @@ class DisplayManager: ObservableObject {
         }
 
         // Diff-based refresh: keep existing DisplayInfo objects (preserves @Published state)
-        var existingByID = Dictionary(uniqueKeysWithValues: displays.map { ($0.displayID, $0) })
+        let existingByID = Dictionary(uniqueKeysWithValues: displays.map { ($0.displayID, $0) })
 
         var updatedDisplays: [DisplayInfo] = []
         var addedDisplays: [DisplayInfo] = []
@@ -89,7 +89,7 @@ class DisplayManager: ObservableObject {
         displays = updatedDisplays
         DisplayManagerAccessor.shared.displays = updatedDisplays
 
-        // Regenerate built-in presets (HiDPI 模式 / 原生模式) from updated display list.
+        // Regenerate built-in presets (HiDPI Mode / Native Mode) from updated display list.
         PresetService.shared.refreshBuiltins()
 
         // Only load details / refresh brightness for newly appeared displays

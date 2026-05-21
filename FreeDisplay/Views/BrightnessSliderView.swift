@@ -9,6 +9,12 @@ struct BrightnessSliderView: View {
     @State private var ddcStatus: Bool? = nil  // nil=unknown, true=DDC, false=Software
     /// Throttle DDC writes during drag to ~100ms intervals.
     @State private var lastDDCWrite: Date = .distantPast
+    private static let sliderRange: ClosedRange<Double> = 5...100
+
+    private static func sliderValue(_ value: Double) -> Double {
+        guard value.isFinite else { return 50 }
+        return min(sliderRange.upperBound, max(sliderRange.lowerBound, value))
+    }
 
     var body: some View {
         VStack(spacing: 2) {
@@ -20,7 +26,7 @@ struct BrightnessSliderView: View {
                         .fill(Color.blue)
                         .frame(width: 5, height: 5)
                         .accessibilityHidden(true)
-                    Text("系统")
+                    Text("System")
                         .font(.caption2)
                         .foregroundColor(.blue)
                 } else if let status = ddcStatus {
@@ -28,7 +34,7 @@ struct BrightnessSliderView: View {
                         .fill(status ? Color.green : Color.orange)
                         .frame(width: 5, height: 5)
                         .accessibilityHidden(true)
-                    Text(status ? "DDC" : "软件")
+                    Text(status ? "DDC" : "Software")
                         .font(.caption2)
                         .foregroundColor(status ? .green : .orange)
                 }
@@ -37,12 +43,12 @@ struct BrightnessSliderView: View {
             .padding(.top, 2)
             .accessibilityLabel(
                 display.isBuiltin
-                    ? String(localized: "亮度控制模式：系统")
+                    ? String(localized: "Brightness control mode: System")
                     : (ddcStatus == true
-                        ? String(localized: "亮度控制模式：DDC 硬件")
-                        : String(localized: "亮度控制模式：软件模拟"))
+                        ? String(localized: "Brightness control mode: DDC hardware")
+                        : String(localized: "Brightness control mode: Software simulation"))
             )
-            .help(display.isBuiltin ? "系统亮度：通过系统 API 控制内建显示屏亮度" : "DDC: 硬件直接控制亮度\n软件: 通过软件调节亮度")
+            .help(display.isBuiltin ? "System brightness: controlled through macOS display APIs" : "DDC: direct hardware brightness control\nSoftware: simulated brightness through gamma")
 
             HStack(spacing: 6) {
                 let sunIcon: String = {
@@ -57,7 +63,7 @@ struct BrightnessSliderView: View {
                     .animation(.easeInOut(duration: 0.2), value: sunIcon)
                     .accessibilityHidden(true)
 
-                Slider(value: $localBrightness, in: 5...100, step: 1) { editing in
+                Slider(value: $localBrightness, in: Self.sliderRange, step: 1) { editing in
                     isDragging = editing
                     if !editing {
                         // Drag ended — apply final value with smooth transition and show highlight.
@@ -75,10 +81,15 @@ struct BrightnessSliderView: View {
                         lastDDCWrite = Date()
                     }
                 }
-                .accessibilityLabel("显示器亮度")
+                .accessibilityLabel("Display brightness")
                 .accessibilityValue("\(Int(localBrightness))%")
-                .help("拖动调整亮度")
+                .help("Drag to adjust brightness")
                 .onChange(of: localBrightness) { _, newValue in
+                    let safeValue = Self.sliderValue(newValue)
+                    if safeValue != newValue {
+                        localBrightness = safeValue
+                        return
+                    }
                     guard isDragging else { return }
                     // Apply immediately — the service chooses software or DDC internally.
                     // For DDC displays, throttle to ~100ms to avoid flooding the I2C bus.
@@ -86,13 +97,13 @@ struct BrightnessSliderView: View {
                     let now = Date()
                     if isDDC && now.timeIntervalSince(lastDDCWrite) < 0.1 {
                         // Too soon for another DDC write; the drag-end handler will flush the final value.
-                        display.brightness = newValue
+                        display.brightness = safeValue
                         return
                     }
                     lastDDCWrite = now
-                    display.brightness = newValue
+                    display.brightness = safeValue
                     Task { @MainActor in
-                        await BrightnessService.shared.setBrightness(newValue, for: display)
+                        await BrightnessService.shared.setBrightness(safeValue, for: display)
                     }
                 }
 
@@ -104,7 +115,7 @@ struct BrightnessSliderView: View {
 
                 let brightnessLabel: String = {
                     if ddcStatus == false {
-                        return "\(String(localized: "软件")) \(Int(localBrightness))%"
+                        return "\(String(localized: "Software")) \(Int(localBrightness))%"
                     }
                     return "\(Int(localBrightness))%"
                 }()
@@ -119,18 +130,23 @@ struct BrightnessSliderView: View {
             .padding(.vertical, 4)
         }
         .task(id: display.displayID) {
-            localBrightness = display.brightness
+            localBrightness = Self.sliderValue(display.brightness)
             updateDDCStatus()
         }
         .onChange(of: display.brightness) { _, newValue in
-            if !isDragging && abs(newValue - localBrightness) >= 1 {
-                localBrightness = newValue
+            let safeValue = Self.sliderValue(newValue)
+            if !isDragging && abs(safeValue - localBrightness) >= 1 {
+                localBrightness = safeValue
             }
         }
     }
 
     private func updateDDCStatus() {
-        ddcStatus = BrightnessService.shared.isDDCAvailable(for: display.displayID)
+        guard !display.isBuiltin else {
+            ddcStatus = nil
+            return
+        }
+        ddcStatus = BrightnessService.shared.isDDCAvailable(for: display.displayID) ?? false
     }
 }
 
@@ -140,10 +156,17 @@ struct CombinedBrightnessView: View {
     @State private var isDragging: Bool = false
     /// Throttle DDC writes during drag to ~100ms intervals.
     @State private var lastDDCWrite: Date = .distantPast
+    private static let sliderRange: ClosedRange<Double> = 5...100
+
+    private static func sliderValue(_ value: Double) -> Double {
+        guard value.isFinite else { return 50 }
+        return min(sliderRange.upperBound, max(sliderRange.lowerBound, value))
+    }
 
     private var averageBrightness: Double {
         guard !displays.isEmpty else { return 50 }
-        return displays.map(\.brightness).reduce(0, +) / Double(displays.count)
+        let values = displays.map { Self.sliderValue($0.brightness) }
+        return values.reduce(0, +) / Double(values.count)
     }
 
     /// True if any display in the group uses DDC (so we apply throttle).
@@ -158,7 +181,7 @@ struct CombinedBrightnessView: View {
                     .foregroundColor(.yellow)
                     .font(.caption)
                     .accessibilityHidden(true)
-                Text("亮度（组合）")
+                Text("Brightness (combined)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
@@ -175,7 +198,7 @@ struct CombinedBrightnessView: View {
                     .frame(width: 14)
                     .accessibilityHidden(true)
 
-                Slider(value: $combinedBrightness, in: 5...100, step: 1) { editing in
+                Slider(value: $combinedBrightness, in: Self.sliderRange, step: 1) { editing in
                     isDragging = editing
                     if !editing {
                         // Drag ended — flush final value to all displays with smooth transition.
@@ -187,21 +210,26 @@ struct CombinedBrightnessView: View {
                         lastDDCWrite = Date()
                     }
                 }
-                .accessibilityLabel("组合亮度")
+                .accessibilityLabel("Combined brightness")
                 .accessibilityValue("\(Int(combinedBrightness))%")
                 .onChange(of: combinedBrightness) { _, newValue in
+                    let safeValue = Self.sliderValue(newValue)
+                    if safeValue != newValue {
+                        combinedBrightness = safeValue
+                        return
+                    }
                     guard isDragging else { return }
                     let now = Date()
                     if anyDDC && now.timeIntervalSince(lastDDCWrite) < 0.1 {
                         // Throttle DDC — update model only; drag-end flushes final value.
-                        for display in displays { display.brightness = newValue }
+                        for display in displays { display.brightness = safeValue }
                         return
                     }
                     lastDDCWrite = now
                     Task { @MainActor in
                         for display in displays {
-                            display.brightness = newValue
-                            await BrightnessService.shared.setBrightness(newValue, for: display)
+                            display.brightness = safeValue
+                            await BrightnessService.shared.setBrightness(safeValue, for: display)
                         }
                     }
                 }
@@ -216,7 +244,11 @@ struct CombinedBrightnessView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .onAppear {
-            combinedBrightness = averageBrightness
+            combinedBrightness = Self.sliderValue(averageBrightness)
+        }
+        .onChange(of: averageBrightness) { _, newValue in
+            guard !isDragging else { return }
+            combinedBrightness = Self.sliderValue(newValue)
         }
     }
 }

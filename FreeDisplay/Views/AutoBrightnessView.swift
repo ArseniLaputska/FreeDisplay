@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// "自动亮度" section — follows builtin screen brightness and adjusts external display brightness automatically.
+/// Auto brightness section — follows built-in screen brightness and adjusts external display brightness automatically.
 struct AutoBrightnessView: View {
     @StateObject private var service = AutoBrightnessService.shared
     @State private var isHovered = false
@@ -16,7 +16,7 @@ struct AutoBrightnessView: View {
             HStack {
                 MenuItemIcon(systemName: "sun.max.trianglebadge.exclamationmark", color: service.isEnabled ? .orange : .secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("自动亮度")
+                    Text("Auto Brightness")
                         .font(.body)
                     Text(statusText)
                         .font(.caption2)
@@ -39,11 +39,11 @@ struct AutoBrightnessView: View {
 
     private var statusText: String {
         if builtinUnavailable {
-            return String(localized: "未检测到内建显示屏")
+            return String(localized: "No built-in display detected")
         } else if service.isEnabled {
-            return String(localized: "跟随内建屏亮度同步中")
+            return String(localized: "Syncing with built-in display brightness")
         } else {
-            return String(localized: "跟随内建屏亮度调整外接显示器")
+            return String(localized: "Use built-in brightness for external displays")
         }
     }
 }

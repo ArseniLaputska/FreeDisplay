@@ -1,14 +1,15 @@
 import AppKit
 import CoreGraphics
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var wakeObserver: NSObjectProtocol?
 
     /// Called by FreeDisplayApp to provide access to the live DisplayManager instance.
     var onWake: (() -> Void)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 防止重复启动：如果已有实例在运行，直接退出
+        // Prevent duplicate app instances.
         let runningApps = NSWorkspace.shared.runningApplications.filter {
             $0.bundleIdentifier == Bundle.main.bundleIdentifier
         }
@@ -26,7 +27,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.onWake?()
+            MainActor.assumeIsolated {
+                self?.onWake?()
+            }
         }
     }
 

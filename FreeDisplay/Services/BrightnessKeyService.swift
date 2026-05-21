@@ -35,24 +35,26 @@ final class BrightnessKeyService: @unchecked Sendable {
     private var selfRetained: Unmanaged<BrightnessKeyService>?
     /// Number of poll retries attempted.
     private var pollRetryCount = 0
+    /// Avoid spamming console while Accessibility permission is missing.
+    private var loggedAccessibilityFailure = false
     /// Max poll retries before giving up (2s × 15 = 30s).
-    private static let maxPollRetries = 15
+    private nonisolated static let maxPollRetries = 15
 
     // MARK: - NX Media Key Constants
-    // Marked nonisolated(unsafe) so they can be read from the nonisolated callback method.
+    // Marked nonisolated so they can be read from the nonisolated callback method.
     // These are immutable compile-time constants so there is no data-race risk.
 
     /// CGEventType raw value for NSSystemDefined / NX_SYSDEFINED events (media keys).
-    private nonisolated(unsafe) static let cgEventTypeSystemDefinedRaw: UInt32 = 14
+    private nonisolated static let cgEventTypeSystemDefinedRaw: UInt32 = 14
     /// NX_SUBTYPE_AUX_CONTROL_BUTTONS — the subtype value for media/function keys.
-    private nonisolated(unsafe) static let nxSubtypeAuxControlButtons: Int16 = 8
+    private nonisolated static let nxSubtypeAuxControlButtons: Int16 = 8
     /// NX_KEYTYPE_BRIGHTNESS_UP
-    private nonisolated(unsafe) static let nxKeytypeBrightnessUp: Int = 2
+    private nonisolated static let nxKeytypeBrightnessUp: Int = 2
     /// NX_KEYTYPE_BRIGHTNESS_DOWN
-    private nonisolated(unsafe) static let nxKeytypeBrightnessDown: Int = 3
+    private nonisolated static let nxKeytypeBrightnessDown: Int = 3
 
     /// Each key press moves brightness by 1/16 (≈ 6.25 %), matching macOS native behaviour.
-    private nonisolated(unsafe) static let brightnessStep: Double = 100.0 / 16.0
+    private nonisolated static let brightnessStep: Double = 100.0 / 16.0
 
     // MARK: - Start / Stop
 
@@ -80,7 +82,10 @@ final class BrightnessKeyService: @unchecked Sendable {
         guard let tap else {
             retained.release()
             selfRetained = nil
-            NSLog("[BrightnessKeyService] Event tap creation failed — no accessibility permission")
+            if !loggedAccessibilityFailure {
+                NSLog("[BrightnessKeyService] Event tap creation failed — grant Accessibility permission to use brightness keys")
+                loggedAccessibilityFailure = true
+            }
             pollForAccessibility()
             return
         }
@@ -91,6 +96,7 @@ final class BrightnessKeyService: @unchecked Sendable {
 
         self.eventTap = tap
         self.runLoopSource = source
+        self.loggedAccessibilityFailure = false
 
         NSLog("[BrightnessKeyService] Event tap installed successfully")
     }
@@ -119,19 +125,20 @@ final class BrightnessKeyService: @unchecked Sendable {
     /// Polls every 2 seconds by attempting to create the tap. Stops after maxPollRetries.
     private func pollForAccessibility() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
-            guard let self else { timer.invalidate(); return }
-            self.pollRetryCount += 1
-            if self.pollRetryCount > Self.maxPollRetries {
-                NSLog("[BrightnessKeyService] Gave up after %d retries — grant Accessibility permission and restart app", Self.maxPollRetries)
-                timer.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.pollRetryCount += 1
+                if self.pollRetryCount > Self.maxPollRetries {
+                    NSLog("[BrightnessKeyService] Gave up after %d retries — grant Accessibility permission and restart app", Self.maxPollRetries)
+                    self.pollTimer?.invalidate()
+                    self.pollTimer = nil
+                    return
+                }
+                self.pollTimer?.invalidate()
                 self.pollTimer = nil
-                return
+                self.start()
             }
-            NSLog("[BrightnessKeyService] Poll %d/%d: retrying…", self.pollRetryCount, Self.maxPollRetries)
-            timer.invalidate()
-            self.pollTimer = nil
-            self.start()
         }
     }
 

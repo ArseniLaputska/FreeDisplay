@@ -18,14 +18,14 @@ struct ColorProfileView: View {
                     ProgressView()
                         .scaleEffect(0.65)
                         .frame(width: 14, height: 14)
-                    Text("正在加载描述文件…")
+                    Text("Loading profiles...")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
             } else if profiles.isEmpty {
-                Text("未找到描述文件")
+                Text("No profiles found")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 12)
@@ -36,7 +36,7 @@ struct ColorProfileView: View {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
                             .font(.caption)
-                        Text("已应用")
+                        Text("Applied")
                             .font(.caption)
                             .foregroundColor(.green)
                     }
@@ -56,7 +56,7 @@ struct ColorProfileView: View {
                 let rest = otherProfiles
 
                 if !recommended.isEmpty {
-                    SectionBadge(title: "推荐")
+                    SectionBadge(title: "Recommended")
                     ForEach(recommended) { profile in
                         ProfileRow(
                             profile: profile,
@@ -65,12 +65,12 @@ struct ColorProfileView: View {
                             isDisabled: applyingPath != nil,
                             onTap: { applyProfile(profile) }
                         )
-                        .help("切换至此颜色配置文件")
+                        .help("Switch to this color profile")
                     }
                 }
 
                 if !rest.isEmpty {
-                    SectionBadge(title: "所有描述文件")
+                    SectionBadge(title: "All Profiles")
                     ForEach(rest) { profile in
                         ProfileRow(
                             profile: profile,
@@ -79,7 +79,7 @@ struct ColorProfileView: View {
                             isDisabled: applyingPath != nil,
                             onTap: { applyProfile(profile) }
                         )
-                        .help("切换至此颜色配置文件")
+                        .help("Switch to this color profile")
                     }
                 }
             }
@@ -132,7 +132,7 @@ struct ColorProfileView: View {
                     applySuccess = false
                 }
             } else {
-                applyError = String(localized: "应用失败，请重试")
+                applyError = String(localized: "Apply failed, please try again")
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     applyError = nil

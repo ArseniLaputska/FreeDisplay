@@ -3,9 +3,6 @@ import IOKit
 import IOKit.graphics
 import CoreGraphics
 
-@_silgen_name("CGDisplayIOServicePort")
-private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
-
 // MARK: - BrightnessAnimator
 
 /// Manages smooth brightness transitions for a single display.
@@ -141,6 +138,11 @@ final class BrightnessService: @unchecked Sendable {
     /// Used to denormalize 0–100% into the display's native DDC range.
     private var ddcMaxBrightness: [CGDirectDisplayID: UInt16] = [:]
 
+    private static func normalizedBrightnessPercent(_ value: Double) -> Double {
+        guard value.isFinite else { return 50.0 }
+        return max(0.0, min(100.0, value))
+    }
+
     // MARK: - Public API
 
     @MainActor
@@ -155,7 +157,7 @@ final class BrightnessService: @unchecked Sendable {
                 }
             }
             if let b = brightness {
-                display.brightness = b
+                display.brightness = Self.normalizedBrightnessPercent(b)
             }
         } else {
             // First check if DDC is already known to be unavailable; if so skip the
@@ -164,7 +166,8 @@ final class BrightnessService: @unchecked Sendable {
                 ddcAvailable[displayID] == false
             }
             if knownUnavailable {
-                // Can't read brightness from gamma tables meaningfully; leave value as-is
+                let softwareFactor = currentSoftwareBrightness(for: displayID) ?? loadSoftwareBrightness(for: displayID)
+                display.brightness = softwareFactor.map { Self.normalizedBrightnessPercent($0 * 100.0) } ?? 100.0
                 return
             }
 
@@ -174,7 +177,9 @@ final class BrightnessService: @unchecked Sendable {
             ) { [weak self] result in
                 guard let self else { return }
                 if let result = result, result.max > 0 {
-                    let brightness = Double(result.current) / Double(result.max) * 100.0
+                    let brightness = Self.normalizedBrightnessPercent(
+                        Double(result.current) / Double(result.max) * 100.0
+                    )
                     self.ddcAvailableLock.lock()
                     self.ddcAvailable[displayID] = true
                     self.ddcMaxBrightness[displayID] = result.max
@@ -187,6 +192,10 @@ final class BrightnessService: @unchecked Sendable {
                         self.ddcAvailable[displayID] = false
                     }
                     self.ddcAvailableLock.unlock()
+                    let softwareFactor = self.currentSoftwareBrightness(for: displayID) ?? self.loadSoftwareBrightness(for: displayID)
+                    Task { @MainActor in
+                        display.brightness = softwareFactor.map { Self.normalizedBrightnessPercent($0 * 100.0) } ?? 100.0
+                    }
                 }
             }
         }
@@ -201,6 +210,7 @@ final class BrightnessService: @unchecked Sendable {
         // Record manual adjust time so auto-brightness can honour the cooldown period.
         if !isAutoAdjust {
             manualAdjustLock.withLock { lastManualAdjustDate = Date() }
+            SettingsService.shared.setBrightness(clamped, for: displayID)
         }
 
         if isBuiltin {
@@ -213,8 +223,9 @@ final class BrightnessService: @unchecked Sendable {
             // Check current DDC availability status
             let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
 
-            if currentStatus == false {
-                // DDC known unavailable — go straight to software fallback
+            if currentStatus != true {
+                // DDC is unavailable or unproven — go straight to software fallback.
+                // Some ARM64 IOAVService paths report write success while the display ignores it.
                 queue.async { [weak self] in
                     self?.setSoftwareBrightness(clamped, for: displayID)
                 }
@@ -272,10 +283,11 @@ final class BrightnessService: @unchecked Sendable {
     ) {
         let clamped = max(0.0, min(100.0, targetBrightness))
         let displayID = display.displayID
-        let fromBrightness = display.brightness
+        let fromBrightness = Self.normalizedBrightnessPercent(display.brightness)
 
         if !isAutoAdjust {
             manualAdjustLock.withLock { lastManualAdjustDate = Date() }
+            SettingsService.shared.setBrightness(clamped, for: displayID)
         }
 
         let anim = animator(for: displayID)
@@ -291,8 +303,9 @@ final class BrightnessService: @unchecked Sendable {
         } else {
             let currentStatus: Bool? = ddcAvailableLock.withLock { ddcAvailable[displayID] }
 
-            if currentStatus == false {
-                // Software (gamma) path: 8 steps over 200ms
+            if currentStatus != true {
+                // Software (gamma) path: 8 steps over 200ms.
+                // Only use DDC after a valid read proved current <= max.
                 anim.animate(from: fromBrightness, to: clamped, steps: 8, duration: 0.20) { [weak display] value, _ in
                     display?.brightness = value
                     BrightnessService.shared.setSoftwareBrightness(value, for: displayID)
@@ -421,9 +434,8 @@ final class BrightnessService: @unchecked Sendable {
 
     private static nonisolated(unsafe) let ioDisplayBrightnessKey = "brightness" as CFString
 
-    /// Returns the io_service_t for the built-in display using CGDisplayIOServicePort.
-    /// Falls back to iterating IODisplayConnect services if CGDisplayIOServicePort returns null.
-    /// Caller does NOT need to release — CGDisplayIOServicePort returns a non-retained port.
+    /// Returns the io_service_t for the built-in display using the runtime-loaded
+    /// CGDisplayIOServicePort helper.
     private func builtinIOService() -> io_service_t? {
         // Find the built-in CGDirectDisplayID
         var displayCount: UInt32 = 0
@@ -438,7 +450,7 @@ final class BrightnessService: @unchecked Sendable {
         }
 
         // CGDisplayIOServicePort returns a non-retained service port (do not release)
-        let servicePort = CGDisplayIOServicePort(builtinID)
+        let servicePort = CGPrivate.ioServicePort(for: builtinID)
         if servicePort != MACH_PORT_NULL && servicePort != 0 {
             return servicePort
         }
@@ -469,7 +481,7 @@ final class BrightnessService: @unchecked Sendable {
         for i in 0..<Int(displayCount) {
             let id = displayIDs[i]
             if CGDisplayIsBuiltin(id) == 0 {
-                let port = CGDisplayIOServicePort(id)
+                let port = CGPrivate.ioServicePort(for: id)
                 if port != MACH_PORT_NULL && port != 0 {
                     externalPorts.insert(port)
                 }
@@ -522,7 +534,7 @@ final class BrightnessService: @unchecked Sendable {
         for i in 0..<Int(displayCount) {
             let id = displayIDs[i]
             if CGDisplayIsBuiltin(id) == 0 {
-                let port = CGDisplayIOServicePort(id)
+                let port = CGPrivate.ioServicePort(for: id)
                 if port != MACH_PORT_NULL && port != 0 {
                     externalPorts.insert(port)
                 }

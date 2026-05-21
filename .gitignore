@@ -3,4 +3,6 @@ build/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 DerivedData/
+.derivedData/
+.codex/
 .build/

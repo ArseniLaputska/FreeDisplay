@@ -94,6 +94,11 @@ final class PresetService: ObservableObject, @unchecked Sendable {
             let displayID = display.displayID
             print("[PresetService]   -> matched display '\(display.name)' (id=\(displayID)), \(display.availableModes.count) available modes")
 
+            if display.availableModes.isEmpty {
+                print("[PresetService]   -> modes empty, loading details before applying preset")
+                await display.loadDetails()
+            }
+
             // Set resolution
             let targetMode = display.availableModes.first(where: {
                 $0.width == entry.width &&
@@ -177,6 +182,7 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                       display.isOnline else { return false }
                 let mode = display.currentDisplayMode
                 let modeMatch = mode?.width == entry.width && mode?.height == entry.height
+                    && mode?.isHiDPI == entry.isHiDPI
                 return modeMatch
             }
             if matches && !preset.displays.isEmpty { return preset.id }
@@ -198,43 +204,65 @@ final class PresetService: ObservableObject, @unchecked Sendable {
         let externals = DisplayManagerAccessor.shared.displays.filter { $0.isOnline && !$0.isBuiltin }
         guard !externals.isEmpty else { return [] }
 
-        // --- 原生模式 ---
-        let nativeEntries: [DisplayPresetEntry] = externals.map { display in
-            let nativeMode: DisplayMode? = display.availableModes
+        // --- Native mode ---
+        let nativeEntries: [DisplayPresetEntry] = externals.compactMap { display in
+            let modes: [DisplayMode]
+            if display.availableModes.isEmpty {
+                modes = DisplayMode.availableModes(for: display.displayID)
+                display.availableModes = modes
+            } else {
+                modes = display.availableModes
+            }
+
+            let nativeMode: DisplayMode? = modes
                 .filter { !$0.isHiDPI }
                 .max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
-                ?? display.availableModes.max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
+                ?? modes.max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
                 ?? display.currentDisplayMode
+            guard let nativeMode, nativeMode.width >= 1280, nativeMode.height >= 720 else {
+                return nil
+            }
             return DisplayPresetEntry(
                 displayUUID: display.displayUUID,
-                width: nativeMode?.width ?? display.pixelWidth,
-                height: nativeMode?.height ?? display.pixelHeight,
-                isHiDPI: nativeMode?.isHiDPI ?? false,
+                width: nativeMode.width,
+                height: nativeMode.height,
+                isHiDPI: nativeMode.isHiDPI,
                 brightness: nil,
                 arrangementX: nil,
                 arrangementY: nil
             )
         }
 
-        var nativePreset = DisplayPreset(
-            name: String(localized: "原生模式"),
-            icon: "rectangle.on.rectangle",
-            displays: nativeEntries
-        )
-        nativePreset.isBuiltin = true
+        var result: [DisplayPreset] = []
+        if !nativeEntries.isEmpty {
+            var nativePreset = DisplayPreset(
+                name: String(localized: "Native Mode"),
+                icon: "rectangle.on.rectangle",
+                displays: nativeEntries
+            )
+            nativePreset.isBuiltin = true
+            result.append(nativePreset)
+        }
 
-        var result: [DisplayPreset] = [nativePreset]
-
-        // --- HiDPI 模式 ---
+        // --- HiDPI mode ---
         // Find the best HiDPI mode for each external display (highest logical resolution)
         let hasExternalWithHiDPI = externals.contains { display in
-            display.availableModes.contains { $0.isHiDPI }
+            let modes = display.availableModes.isEmpty ? DisplayMode.availableModes(for: display.displayID) : display.availableModes
+            return modes.contains { $0.isHiDPI }
         }
 
         if hasExternalWithHiDPI {
-            let hidpiEntries: [DisplayPresetEntry] = externals.map { display in
+            let hidpiEntries: [DisplayPresetEntry] = externals.compactMap { display in
+                let modes: [DisplayMode]
+                if display.availableModes.isEmpty {
+                    modes = DisplayMode.availableModes(for: display.displayID)
+                    display.availableModes = modes
+                } else {
+                    modes = display.availableModes
+                }
+
                 // Pick the highest-resolution HiDPI mode available
-                if let bestHiDPI = display.availableModes
+                if let bestHiDPI = modes
                     .filter({ $0.isHiDPI })
                     .max(by: { ($0.width * $0.height) < ($1.width * $1.height) }) {
                     return DisplayPresetEntry(
@@ -247,14 +275,15 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                         arrangementY: nil
                     )
                 } else {
-                    let nativeMode = display.availableModes
+                    let nativeMode = modes
                         .filter { !$0.isHiDPI }
                         .max(by: { ($0.width * $0.height) < ($1.width * $1.height) })
+                    guard let nativeMode else { return nil }
                     return DisplayPresetEntry(
                         displayUUID: display.displayUUID,
-                        width: nativeMode?.width ?? display.pixelWidth,
-                        height: nativeMode?.height ?? display.pixelHeight,
-                        isHiDPI: nativeMode?.isHiDPI ?? false,
+                        width: nativeMode.width,
+                        height: nativeMode.height,
+                        isHiDPI: nativeMode.isHiDPI,
                         brightness: nil,
                         arrangementX: nil,
                         arrangementY: nil
@@ -262,12 +291,14 @@ final class PresetService: ObservableObject, @unchecked Sendable {
                 }
             }
             var hidpiPreset = DisplayPreset(
-                name: String(localized: "HiDPI 模式"),
+                name: String(localized: "HiDPI Mode"),
                 icon: "sparkles",
                 displays: hidpiEntries
             )
             hidpiPreset.isBuiltin = true
-            result.append(hidpiPreset)
+            if !hidpiEntries.isEmpty {
+                result.append(hidpiPreset)
+            }
         }
 
         return result

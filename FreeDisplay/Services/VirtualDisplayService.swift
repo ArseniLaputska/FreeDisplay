@@ -2,9 +2,6 @@ import CoreGraphics
 import Foundation
 import IOKit
 
-@_silgen_name("CGDisplayIOServicePort")
-private func CGDisplayIOServicePort(_ display: CGDirectDisplayID) -> io_service_t
-
 // CGVirtualDisplay and CGVirtualDisplaySettings are ObjC objects without Sendable
 // conformance, but we only use them sequentially (create on main → pass to background
 // for apply → use result on main), so @unchecked Sendable is safe here.
@@ -226,7 +223,7 @@ final class VirtualDisplayService: ObservableObject, @unchecked Sendable {
         for id in displayIDs {
             // A software/virtual display has no IOService entry (servicePort == 0 / MACH_PORT_NULL).
             // Physical displays always have a non-null service port.
-            let servicePort = CGDisplayIOServicePort(id)
+            let servicePort = CGPrivate.ioServicePort(for: id)
             guard servicePort == 0 || servicePort == MACH_PORT_NULL else { continue }
             let w = Int(CGDisplayPixelsWide(id))
             let h = Int(CGDisplayPixelsHigh(id))
